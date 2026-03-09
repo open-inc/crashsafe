@@ -1,0 +1,29 @@
+{
+  "name": "openinc-crashsafe",
+  "version": "1.0.0",
+  "description": "Incremental MongoDB backup and restore tool",
+  "main": "src/index.js",
+  "bin": {
+    "openinc-crashsafe": "src/index.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "prepare": "chmod +x src/index.js",
+    "backup": "node src/index.js backup",
+    "restore": "node src/index.js restore",
+    "list": "node src/index.js list",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "dotenv": "^16.4.5",
+    "g": "^2.0.1",
+    "mongodb": "^6.6.2",
+    "node-cron": "^3.0.3",
+    "pino": "^9.2.0",
+    "pino-pretty": "^11.2.1"
+  }
+}

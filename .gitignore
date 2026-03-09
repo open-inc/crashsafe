@@ -1,0 +1,4 @@
+.env
+backups
+node_modules
+.mongo_data

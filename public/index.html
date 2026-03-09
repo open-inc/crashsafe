@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MongoDB CrashSafe</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Outfit:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #6366f1;
+            --primary-hover: #4f46e5;
+            --secondary: #64748b;
+            --success: #10b981;
+            --error: #ef4444;
+            --warning: #f59e0b;
+            --bg: #0f172a;
+            --card-bg: rgba(30, 41, 59, 0.7);
+            --border: rgba(255, 255, 255, 0.1);
+            --text: #f8fafc;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 2rem;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 900px;
+            backdrop-filter: blur(12px);
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            padding: 3rem;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            animation: fadeIn 0.6s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 3rem;
+        }
+
+        h1 {
+            font-family: 'Outfit', sans-serif;
+            font-size: 2rem;
+            font-weight: 700;
+            background: linear-gradient(to right, #818cf8, #c084fc);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .status-badge {
+            padding: 0.5rem 1rem;
+            border-radius: 9999px;
+            font-size: 0.875rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--success);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+        }
+
+        .status-badge.running {
+            background: rgba(99, 102, 241, 0.1);
+            color: #818cf8;
+            border-color: rgba(99, 102, 241, 0.2);
+        }
+
+        .status-badge::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+            box-shadow: 0 0 10px currentColor;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 3rem;
+        }
+
+        .card {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 1.5rem;
+            transition: all 0.3s ease;
+        }
+
+        .card:hover {
+            background: rgba(255, 255, 255, 0.05);
+            transform: translateY(-4px);
+            border-color: rgba(255, 255, 255, 0.2);
+        }
+
+        .card h3 {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--secondary);
+            margin-bottom: 0.75rem;
+        }
+
+        .card .value {
+            font-size: 1.25rem;
+            font-weight: 600;
+            font-family: 'Outfit', sans-serif;
+        }
+
+        .card .sub {
+            font-size: 0.875rem;
+            color: var(--secondary);
+            margin-top: 0.5rem;
+        }
+
+        .actions {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .action-group {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+        }
+
+        .btn {
+            padding: 0.75rem 1.5rem;
+            border-radius: 12px;
+            font-weight: 600;
+            font-size: 0.875rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            border: none;
+            outline: none;
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: var(--primary-hover);
+            box-shadow: 0 0 20px rgba(99, 102, 241, 0.4);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text);
+            border: 1px solid var(--border);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .toast-container {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .toast {
+            background: rgba(30, 41, 59, 0.9);
+            border: 1px solid var(--border);
+            padding: 1rem 1.5rem;
+            border-radius: 12px;
+            backdrop-filter: blur(8px);
+            animation: slideIn 0.3s ease-out;
+        }
+
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+
+        /* Modal Styles */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(15, 23, 42, 0.8);
+            backdrop-filter: blur(8px);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        .modal {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            padding: 2rem;
+            width: 100%;
+            max-width: 450px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+        }
+
+        .modal h2 {
+            font-family: 'Outfit', sans-serif;
+            margin-bottom: 1.5rem;
+            font-size: 1.25rem;
+        }
+
+        .modal select {
+            width: 100%;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 0.75rem;
+            border-radius: 12px;
+            margin-bottom: 1.5rem;
+            outline: none;
+        }
+
+        .modal select option {
+            background: var(--bg);
+        }
+
+        .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 1rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>MongoDB CrashSafe</h1>
+            <div id="scheduler-status" class="status-badge">Active</div>
+        </header>
+
+        <div class="grid">
+            <div class="card">
+                <h3>Schedule</h3>
+                <div id="cron-val" class="value">-</div>
+                <div class="sub">Cron pattern</div>
+            </div>
+            <div class="card">
+                <h3>Last Run</h3>
+                <div id="last-run-val" class="value">-</div>
+                <div id="last-status-val" class="sub">No runs yet</div>
+            </div>
+            <div id="database-cards" class="grid" style="grid-column: 1 / -1; margin-bottom: 0;">
+                <!-- DB cards inserted here -->
+            </div>
+        </div>
+
+    </div>
+
+    <div id="restore-modal" class="modal-overlay">
+        <div class="modal">
+            <h2>Select Starting Backup</h2>
+            <p style="color: var(--secondary); font-size: 0.875rem; margin-bottom: 1rem;">Choose which backup to start replaying from (incremental).</p>
+            <select id="backup-select"></select>
+            <div class="modal-actions">
+                <button onclick="closeRestoreModal()" class="btn btn-secondary">Cancel</button>
+                <button onclick="triggerRestoreFromModal()" id="restore-confirm-btn" class="btn btn-primary">Start Restore</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast-container" class="toast-container"></div>
+
+    <script>
+        let lastStatusData = null;
+        let activeRestoreTarget = null;
+
+        function showToast(message) {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = 'toast';
+            toast.textContent = message;
+            container.appendChild(toast);
+            setTimeout(() => toast.remove(), 3000);
+        }
+
+        async function triggerAction(url, body) {
+            try {
+                const res = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                if (res.ok) {
+                    showToast('Action triggered');
+                } else {
+                    const data = await res.json().catch(() => ({}));
+                    showToast('Error: ' + (data.error || 'Action failed'));
+                }
+            } catch (err) {
+                showToast('Network error');
+            }
+        }
+
+        function confirmRestore(target) {
+            if (confirm(`Warning: This will WIPE the ${target} database and restore from the full chain. Are you absolutely sure?`)) {
+                triggerAction('/api/trigger/restore', {type: 'full', target});
+            }
+        }
+
+        function openRestoreModal(target) {
+            if (!lastStatusData) return showToast('No data available');
+            const db = lastStatusData.backups.find(b => b.type === target);
+            if (!db || !db.history.length) return showToast('No backup history for ' + target);
+            
+            activeRestoreTarget = target;
+            const select = document.getElementById('backup-select');
+            select.innerHTML = '';
+            
+            db.history.forEach(h => {
+                const opt = document.createElement('option');
+                opt.value = h.id;
+                opt.textContent = new Date(h.id).toLocaleString() + (h.type === 'full' ? ' (Full)' : '');
+                select.appendChild(opt);
+            });
+            
+            document.getElementById('restore-modal').style.display = 'flex';
+        }
+
+        function closeRestoreModal() {
+            document.getElementById('restore-modal').style.display = 'none';
+            activeRestoreTarget = null;
+        }
+
+        function triggerRestoreFromModal() {
+            const select = document.getElementById('backup-select');
+            const sinceId = select.value;
+            if (!sinceId || !activeRestoreTarget) return;
+            
+            triggerAction('/api/trigger/restore', { type: 'incremental', sinceId, target: activeRestoreTarget });
+            closeRestoreModal();
+        }
+
+        function updateUI(data) {
+            lastStatusData = data;
+            document.getElementById('cron-val').textContent = data.scheduler.cron;
+            document.getElementById('last-run-val').textContent = data.scheduler.lastRun 
+                ? new Date(data.scheduler.lastRun).toLocaleTimeString() 
+                : 'Never';
+            
+            const lastStatusEl = document.getElementById('last-status-val');
+            lastStatusEl.textContent = data.scheduler.lastStatus ? 'Status: ' + data.scheduler.lastStatus : 'No status';
+            lastStatusEl.style.color = data.scheduler.lastStatus === 'error' ? 'var(--error)' : 'var(--secondary)';
+
+            const statusBadge = document.getElementById('scheduler-status');
+            statusBadge.textContent = data.scheduler.running ? 'Active' : 'Stopped';
+            statusBadge.className = 'status-badge ' + (data.scheduler.lastStatus === 'running' ? 'running' : '');
+
+            const dbContainer = document.getElementById('database-cards');
+            dbContainer.innerHTML = '';
+            data.backups.forEach(db => {
+                const card = document.createElement('div');
+                card.className = 'card';
+                card.innerHTML = `
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1.5rem;">
+                        <div>
+                            <h3>DB: ${db.name} (${db.type})</h3>
+                            <div class="value">${db.lastBackup ? new Date(db.lastBackup).toLocaleDateString() : 'N/A'}</div>
+                            <div class="sub">${db.count} backups available</div>
+                        </div>
+                    </div>
+                    
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; border-top: 1px solid var(--border); padding-top: 1.5rem; margin-top: 1rem;">
+                        <div style="grid-column: 1 / -1; font-size: 0.75rem; text-transform: uppercase; color: var(--secondary); margin-bottom: 0.25rem;">Actions</div>
+                        <button onclick="triggerAction('/api/trigger/backup', {type: 'incremental', target: '${db.type}'})" class="btn btn-secondary" style="font-size: 0.75rem; padding: 0.5rem;">Inc Backup</button>
+                        <button onclick="triggerAction('/api/trigger/backup', {type: 'full', target: '${db.type}'})" class="btn btn-primary" style="font-size: 0.75rem; padding: 0.5rem;">Full Backup</button>
+                        <button onclick="openRestoreModal('${db.type}')" class="btn btn-secondary" style="font-size: 0.75rem; padding: 0.5rem;">Inc Restore</button>
+                        <button onclick="confirmRestore('${db.type}')" class="btn btn-secondary" style="font-size: 0.75rem; padding: 0.5rem; color: var(--error); border-color: rgba(239, 68, 68, 0.1);">Wipe & Restore</button>
+                    </div>
+                `;
+                dbContainer.appendChild(card);
+            });
+        }
+
+        async function poll() {
+            try {
+                const res = await fetch('/api/status');
+                const data = await res.json();
+                updateUI(data);
+            } catch (err) {}
+        }
+
+        setInterval(poll, 3000);
+        poll();
+    </script>
+</body>
+</html>
