@@ -8,10 +8,11 @@ WORKDIR /app
 
 # Install Node.js dependencies
 COPY package*.json ./
-RUN npm install --production
+RUN npm install --omit=dev
 
 # Bundle app source
-COPY . .
+COPY src ./src
+COPY public ./public
 
 # Ensure src/index.js is executable if necessary, though it is usually invoked via node
 RUN chmod +x src/index.js

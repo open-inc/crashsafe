@@ -11,7 +11,7 @@
   },
   "scripts": {
     "start": "node src/index.js",
-    "prepare": "chmod +x src/index.js",
+    "prepare": "[ -f src/index.js ] && chmod +x src/index.js || true",
     "backup": "node src/index.js backup",
     "restore": "node src/index.js restore",
     "list": "node src/index.js list",
