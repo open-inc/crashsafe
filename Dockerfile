@@ -1,4 +1,5 @@
-FROM node:20-alpine
+FROM node:current-alpine
+
 
 # Install MongoDB CLI Tools (mongodump, mongorestore)
 RUN apk add --no-cache mongodb-tools
