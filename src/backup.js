@@ -5,7 +5,7 @@ const readline = require('node:readline');
 const { BSON: { EJSON } } = require('mongodb');
 const { execFile } = require('node:child_process');
 const { getDb, disconnect } = require('./db');
-const { appendBackupEntry, readManifest } = require('./manifest');
+const { appendBackupEntry, readManifest, computeBackupSize } = require('./manifest');
 const config = require('./config');
 const logger = require('./logger');
 
@@ -24,6 +24,17 @@ const STALE_LOCK_THRESHOLD_MS = 24 * 60 * 60 * 1000;
 
 let inFlight = null;
 let heldLockPath = null;
+
+// In-memory tracking of the most recent run per trigger kind. Cleared on
+// process restart — the persistent record lives in `manifest.json`.
+const lastRuns = {
+    scheduled: null,
+    manual: null,
+};
+
+function getRunStats() {
+    return { ...lastRuns };
+}
 
 function lockFilePath() {
     return path.resolve(config.backupDir, LOCKFILE_NAME);
@@ -97,6 +108,29 @@ function releaseLock() {
         if (err.code !== 'ENOENT') {
             logger.warn({ err }, 'Failed to remove backup lock file');
         }
+    }
+}
+
+/**
+ * Merge progress data into the held lockfile so the dashboard can show what
+ * the backup is currently doing. Best-effort — ignored on read/write errors.
+ *
+ * Uses write-temp + rename so a concurrent reader (e.g. another process running
+ * tryAcquireLock) never observes a half-written / truncated file. POSIX
+ * rename(2) is atomic; without this, a torn read could be parsed as corrupted,
+ * misclassified as a stale lock, and erroneously reclaimed — defeating the
+ * cross-process concurrency guard.
+ */
+function updateLockProgress(progress) {
+    if (!heldLockPath) return;
+    try {
+        const existing = JSON.parse(fs.readFileSync(heldLockPath, 'utf-8'));
+        const merged = { ...existing, ...progress, updatedAt: new Date().toISOString() };
+        const tmp = heldLockPath + '.tmp';
+        fs.writeFileSync(tmp, JSON.stringify(merged), 'utf-8');
+        fs.renameSync(tmp, heldLockPath);
+    } catch {
+        // Best-effort — never let progress reporting break the backup itself.
     }
 }
 
@@ -226,7 +260,14 @@ async function backupDb(dbName, dbType, forceFull, id) {
     const trackingData = [];
     const touchedCollections = [];
 
+    let processedCount = 0;
     for (const collName of collectionNames) {
+        updateLockProgress({
+            currentDb: dbType,
+            currentCollection: collName,
+            processedCollections: processedCount,
+            totalCollections: collectionNames.length,
+        });
         const isConfigColl = dbType === 'data' && collName === config.sensorConfigCollection;
         const coll = db.collection(collName);
 
@@ -294,10 +335,21 @@ async function backupDb(dbName, dbType, forceFull, id) {
 
         // Give MongoDB's WiredTiger cache a moment to evict and checkpoint
         await sleep(COLLECTION_PAUSE_MS);
+        processedCount++;
     }
 
     if (trackingData.length > 0) {
         fs.writeFileSync(path.join(dir, `${slug}.tracking.json`), EJSON.stringify(trackingData), 'utf-8');
+    }
+
+    // Size tracking is best-effort — a failure here must not prevent the manifest
+    // entry from being written, otherwise the next run would miss this run's data
+    // and re-do a full backup.
+    let size = null;
+    try {
+        size = computeBackupSize(dir, slug);
+    } catch (err) {
+        logger.warn({ err, dbType, slug }, 'Failed to compute backup size; manifest entry will be written without it');
     }
 
     appendBackupEntry(dir, {
@@ -308,6 +360,7 @@ async function backupDb(dbName, dbType, forceFull, id) {
         file: fs.existsSync(dumpOutDir) ? slug : null,
         trackingFile: trackingData.length > 0 ? `${slug}.tracking.json` : null,
         idDir: slug,
+        size,
     });
 
     logger.info(
@@ -323,6 +376,7 @@ async function backupDb(dbName, dbType, forceFull, id) {
 
 async function runBackup(opts = {}) {
     const trigger = opts.trigger ?? 'unknown';
+    const triggerKind = (trigger === 'scheduled') ? 'scheduled' : 'manual';
 
     if (inFlight) {
         logger.warn({ trigger }, 'Backup skipped: another backup is already running in this process');
@@ -335,6 +389,7 @@ async function runBackup(opts = {}) {
         return { skipped: true, reason: 'cross-process', holder: acquired.holder };
     }
 
+    const startedAt = new Date().toISOString();
     inFlight = (async () => {
         try {
             const results = [];
@@ -345,7 +400,22 @@ async function runBackup(opts = {}) {
             if ((!opts.target || opts.target === 'parse' || opts.target === 'all') && config.dbParse) {
                 results.push(await backupDb(config.dbParse, 'parse', opts.full ?? false, id));
             }
+            lastRuns[triggerKind] = {
+                trigger,
+                startedAt,
+                finishedAt: new Date().toISOString(),
+                status: 'success',
+            };
             return results;
+        } catch (err) {
+            lastRuns[triggerKind] = {
+                trigger,
+                startedAt,
+                finishedAt: new Date().toISOString(),
+                status: 'error',
+                error: err?.message ?? String(err),
+            };
+            throw err;
         } finally {
             releaseLock();
             inFlight = null;
@@ -355,4 +425,4 @@ async function runBackup(opts = {}) {
     return inFlight;
 }
 
-module.exports = { runBackup };
+module.exports = { runBackup, getRunStats };

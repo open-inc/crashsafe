@@ -131,6 +131,11 @@ OPENINC_MONGO_BACKUP_UPDATED_AT_FIELD=updatedAt
 # Port for the Web Dashboard (default: 3000)
 OPENINC_MONGO_BACKUP_UI_PORT=3000
 
+# Optional HTTP Basic Auth for the dashboard.
+# Set BOTH to enable auth; leave BOTH unset to disable. Setting only one is rejected at startup.
+# OPENINC_MONGO_BACKUP_AUTH_USER=admin
+# OPENINC_MONGO_BACKUP_AUTH_PASSWORD=changeme
+
 `;
 
 program

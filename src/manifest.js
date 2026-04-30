@@ -4,6 +4,38 @@ const path = require('node:path');
 
 const MANIFEST_FILE = 'manifest.json';
 
+/**
+ * Recursively sum the size in bytes of every file under `dir`.
+ * Returns 0 if the directory does not exist.
+ */
+function dirSize(dir) {
+    if (!fs.existsSync(dir)) return 0;
+    let total = 0;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+            total += dirSize(p);
+        } else if (entry.isFile()) {
+            try { total += fs.statSync(p).size; } catch { /* file gone — ignore */ }
+        }
+    }
+    return total;
+}
+
+/**
+ * Total bytes a single backup occupies on disk: dump dir + tracking file + ids dir.
+ */
+function computeBackupSize(dbBackupDir, slug) {
+    let total = 0;
+    total += dirSize(path.join(dbBackupDir, slug));
+    const trackingFile = path.join(dbBackupDir, `${slug}.tracking.json`);
+    if (fs.existsSync(trackingFile)) {
+        try { total += fs.statSync(trackingFile).size; } catch { /* ignore */ }
+    }
+    total += dirSize(path.join(dbBackupDir, 'ids', slug));
+    return total;
+}
+
 function readManifest(dbBackupDir) {
     const filePath = path.join(dbBackupDir, MANIFEST_FILE);
     if (!fs.existsSync(filePath)) return { backups: [] };
@@ -64,7 +96,7 @@ function getChainFrom(dbBackupDir, sinceId, toId = null) {
     return backups.slice(fromIdx, toIdx + 1);
 }
 
-module.exports = { readManifest, writeManifest, appendBackupEntry, findEntry, getChainUpTo, getChainFrom };
+module.exports = { readManifest, writeManifest, appendBackupEntry, findEntry, getChainUpTo, getChainFrom, dirSize, computeBackupSize };
 
 /**
  * @typedef {object} BackupEntry
@@ -75,4 +107,5 @@ module.exports = { readManifest, writeManifest, appendBackupEntry, findEntry, ge
  * @property {string}   file         Dump directory name (relative to dbBackupDir)
  * @property {string}   trackingFile Tracking JSON filename (relative to dbBackupDir)
  * @property {string}   idDir        _id snapshot directory (relative to dbBackupDir/ids); contains one <collection>.jsonl per collection
+ * @property {number}   [size]       Total disk usage of this backup in bytes (dump + tracking + id snapshot). Optional for entries written before size tracking existed.
  */

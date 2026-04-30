@@ -6,296 +6,498 @@
     <title>MongoDB CrashSafe</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Outfit:wght@400;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
-            --primary: #6366f1;
-            --primary-hover: #4f46e5;
-            --secondary: #64748b;
-            --success: #10b981;
-            --error: #ef4444;
-            --warning: #f59e0b;
-            --bg: #0f172a;
-            --card-bg: rgba(30, 41, 59, 0.7);
-            --border: rgba(255, 255, 255, 0.1);
-            --text: #f8fafc;
+            --bg:           #0b111e;
+            --panel:        #111827;
+            --card:         #131c2e;
+            --border:       #1f2a40;
+            --border-soft:  #182236;
+            --text:         #e6e9ef;
+            --text-2:       #98a1b2;
+            --muted:        #5e6577;
+
+            --primary:      #2563eb;
+            --primary-hover:#1d4ed8;
+            --success:      #10b981;
+            --warning:      #f59e0b;
+            --error:        #ef4444;
+            --accent:       #6366f1;
         }
 
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
 
         body {
-            font-family: 'Inter', sans-serif;
-            background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
+            font-family: 'Inter', -apple-system, system-ui, sans-serif;
+            background: var(--bg);
             color: var(--text);
             min-height: 100vh;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            padding: 2rem;
+            padding: 2.5rem 1.5rem 4rem;
+            -webkit-font-smoothing: antialiased;
+            font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
         }
 
         .container {
             width: 100%;
-            max-width: 900px;
-            backdrop-filter: blur(12px);
-            background: var(--card-bg);
-            border: 1px solid var(--border);
-            border-radius: 24px;
-            padding: 3rem;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-            animation: fadeIn 0.6s ease-out;
+            max-width: 1180px;
+            margin: 0 auto;
         }
 
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
+        /* Header */
         header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 3rem;
+            padding-bottom: 1.5rem;
+            margin-bottom: 2rem;
+            border-bottom: 1px solid var(--border-soft);
         }
-
-        h1 {
-            font-family: 'Outfit', sans-serif;
-            font-size: 2rem;
+        .brand { display: flex; align-items: baseline; gap: 0.6rem; }
+        .brand h1 {
+            font-size: 1.25rem;
             font-weight: 700;
-            background: linear-gradient(to right, #818cf8, #c084fc);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
+            letter-spacing: -0.01em;
+        }
+        .brand .tag {
+            font-size: 0.75rem;
+            color: var(--muted);
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
         }
 
         .status-badge {
-            padding: 0.5rem 1rem;
-            border-radius: 9999px;
-            font-size: 0.875rem;
+            padding: 0.3rem 0.75rem;
+            border-radius: 6px;
+            font-size: 0.75rem;
             font-weight: 600;
-            display: flex;
+            display: inline-flex;
             align-items: center;
             gap: 0.5rem;
             background: rgba(16, 185, 129, 0.1);
             color: var(--success);
-            border: 1px solid rgba(16, 185, 129, 0.2);
+            border: 1px solid rgba(16, 185, 129, 0.25);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
         }
-
         .status-badge.running {
             background: rgba(99, 102, 241, 0.1);
-            color: #818cf8;
-            border-color: rgba(99, 102, 241, 0.2);
+            color: #a5b4fc;
+            border-color: rgba(99, 102, 241, 0.3);
+        }
+        .status-badge::before {
+            content: '';
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: currentColor;
         }
 
-        .status-badge::before {
+        /* Section heading */
+        .section-title {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--muted);
+            font-weight: 600;
+            margin: 2rem 0 0.85rem;
+        }
+
+        /* Stat grid */
+        .stat-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1rem;
+        }
+        @media (max-width: 900px) {
+            .stat-grid { grid-template-columns: repeat(2, 1fr); }
+        }
+
+        .stat-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1.1rem 1.25rem;
+        }
+        .stat-card .label {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--muted);
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+        .stat-card .value {
+            font-size: 1.4rem;
+            font-weight: 600;
+            letter-spacing: -0.01em;
+            font-variant-numeric: tabular-nums;
+        }
+        .stat-card .sub {
+            font-size: 0.78rem;
+            color: var(--text-2);
+            margin-top: 0.35rem;
+        }
+
+        /* DB cards */
+        .db-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 1rem;
+        }
+        @media (max-width: 900px) {
+            .db-grid { grid-template-columns: 1fr; }
+        }
+        .db-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1.5rem;
+        }
+        .db-card .db-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 1.25rem;
+            padding-bottom: 1.25rem;
+            border-bottom: 1px solid var(--border-soft);
+        }
+        .db-card .db-name {
+            font-size: 1rem;
+            font-weight: 600;
+            letter-spacing: -0.005em;
+        }
+        .db-card .db-type {
+            display: inline-block;
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--text-2);
+            background: var(--border-soft);
+            padding: 0.15rem 0.5rem;
+            border-radius: 4px;
+            margin-left: 0.5rem;
+            vertical-align: middle;
+        }
+        .db-card .db-meta {
+            margin-top: 0.5rem;
+            font-size: 0.78rem;
+            color: var(--text-2);
+            font-variant-numeric: tabular-nums;
+        }
+        .db-card .db-stats {
+            text-align: right;
+            font-size: 0.78rem;
+            color: var(--text-2);
+            font-variant-numeric: tabular-nums;
+        }
+        .db-card .db-stats strong {
+            display: block;
+            font-size: 1rem;
+            font-weight: 600;
+            color: var(--text);
+            margin-bottom: 0.15rem;
+        }
+
+        /* Action buttons */
+        .actions-row {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 0.6rem;
+            margin-bottom: 1rem;
+        }
+        .btn {
+            padding: 0.6rem 0.9rem;
+            border-radius: 6px;
+            font-weight: 500;
+            font-size: 0.82rem;
+            font-family: inherit;
+            cursor: pointer;
+            transition: background 0.15s, border-color 0.15s, color 0.15s;
+            border: 1px solid transparent;
+            outline: none;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.4rem;
+        }
+        .btn:focus-visible { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--primary); }
+
+        .btn-primary { background: var(--primary); color: white; }
+        .btn-primary:hover { background: var(--primary-hover); }
+
+        .btn-secondary {
+            background: transparent;
+            color: var(--text);
+            border-color: var(--border);
+        }
+        .btn-secondary:hover {
+            background: var(--border-soft);
+            border-color: #2a3754;
+        }
+
+        .btn-danger {
+            background: transparent;
+            color: var(--error);
+            border-color: rgba(239, 68, 68, 0.3);
+        }
+        .btn-danger:hover {
+            background: rgba(239, 68, 68, 0.08);
+            border-color: rgba(239, 68, 68, 0.5);
+        }
+
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        /* Help box for actions */
+        .help-list {
+            margin-top: 0.5rem;
+            padding: 0.85rem 1rem;
+            background: rgba(255,255,255,0.015);
+            border: 1px solid var(--border-soft);
+            border-radius: 6px;
+            font-size: 0.78rem;
+            color: var(--text-2);
+            line-height: 1.5;
+        }
+        .help-list dt {
+            font-weight: 600;
+            color: var(--text);
+            display: inline;
+        }
+        .help-list dd { display: inline; margin: 0; }
+        .help-list .item { margin-bottom: 0.4rem; }
+        .help-list .item:last-child { margin-bottom: 0; }
+        .help-list .danger-tag {
+            display: inline-block;
+            font-size: 0.65rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--error);
+            margin-right: 0.4rem;
+        }
+
+        /* In-flight banner */
+        .inflight {
+            background: rgba(99, 102, 241, 0.08);
+            border: 1px solid rgba(99, 102, 241, 0.3);
+            border-left: 3px solid var(--accent);
+            border-radius: 8px;
+            padding: 1rem 1.25rem;
+            margin-bottom: 1.5rem;
+            display: none;
+        }
+        .inflight.active { display: block; }
+        .inflight .title {
+            font-weight: 600;
+            font-size: 0.9rem;
+            color: #c7d2fe;
+            margin-bottom: 0.35rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .inflight .title::before {
             content: '';
             width: 8px;
             height: 8px;
             border-radius: 50%;
-            background: currentColor;
-            box-shadow: 0 0 10px currentColor;
+            background: var(--accent);
+            animation: blink 1.6s ease-in-out infinite;
+        }
+        @keyframes blink { 50% { opacity: 0.25; } }
+        .inflight .meta { font-size: 0.8rem; color: var(--text-2); line-height: 1.5; }
+        .inflight .progress-bar {
+            background: var(--border-soft);
+            border-radius: 9999px;
+            height: 4px;
+            margin-top: 0.75rem;
+            overflow: hidden;
+        }
+        .inflight .progress-bar > div {
+            height: 100%;
+            background: var(--accent);
+            transition: width 0.4s ease;
         }
 
-        .grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 1.5rem;
-            margin-bottom: 3rem;
+        /* History table */
+        details.history {
+            margin-top: 1.25rem;
+            border-top: 1px solid var(--border-soft);
+            padding-top: 1rem;
         }
-
-        .card {
-            background: rgba(255, 255, 255, 0.03);
-            border: 1px solid var(--border);
-            border-radius: 16px;
-            padding: 1.5rem;
-            transition: all 0.3s ease;
-        }
-
-        .card:hover {
-            background: rgba(255, 255, 255, 0.05);
-            transform: translateY(-4px);
-            border-color: rgba(255, 255, 255, 0.2);
-        }
-
-        .card h3 {
-            font-size: 0.75rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: var(--secondary);
-            margin-bottom: 0.75rem;
-        }
-
-        .card .value {
-            font-size: 1.25rem;
-            font-weight: 600;
-            font-family: 'Outfit', sans-serif;
-        }
-
-        .card .sub {
-            font-size: 0.875rem;
-            color: var(--secondary);
-            margin-top: 0.5rem;
-        }
-
-        .actions {
-            display: flex;
-            flex-direction: column;
-            gap: 1.5rem;
-        }
-
-        .action-group {
-            display: flex;
-            gap: 1rem;
-            align-items: center;
-        }
-
-        .btn {
-            padding: 0.75rem 1.5rem;
-            border-radius: 12px;
-            font-weight: 600;
-            font-size: 0.875rem;
+        details.history summary {
             cursor: pointer;
-            transition: all 0.2s ease;
-            display: flex;
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--text-2);
+            font-weight: 600;
+            user-select: none;
+            list-style: none;
+            display: inline-flex;
             align-items: center;
-            gap: 0.5rem;
-            border: none;
-            outline: none;
+            gap: 0.4rem;
         }
-
-        .btn-primary {
-            background: var(--primary);
-            color: white;
+        details.history summary::-webkit-details-marker { display: none; }
+        details.history summary::before {
+            content: '▸';
+            font-size: 0.7rem;
+            transition: transform 0.15s;
         }
+        details.history[open] summary::before { transform: rotate(90deg); }
+        details.history summary:hover { color: var(--text); }
 
-        .btn-primary:hover {
-            background: var(--primary-hover);
-            box-shadow: 0 0 20px rgba(99, 102, 241, 0.4);
+        .history-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 0.85rem;
+            font-size: 0.8rem;
+            font-variant-numeric: tabular-nums;
         }
-
-        .btn-secondary {
-            background: rgba(255, 255, 255, 0.05);
-            color: var(--text);
-            border: 1px solid var(--border);
+        .history-table th, .history-table td {
+            text-align: left;
+            padding: 0.5rem 0.6rem;
+            border-bottom: 1px solid var(--border-soft);
         }
-
-        .btn-secondary:hover {
-            background: rgba(255, 255, 255, 0.1);
+        .history-table th {
+            font-weight: 600;
+            color: var(--muted);
+            font-size: 0.68rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
         }
-
-        .btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
+        .history-table tr:last-child td { border-bottom: none; }
+        .history-table .pill {
+            display: inline-block;
+            padding: 0.1rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.68rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
         }
+        .history-table .pill.full { background: rgba(99, 102, 241, 0.15); color: #a5b4fc; }
+        .history-table .pill.incremental { background: var(--border-soft); color: var(--text-2); }
+        .history-empty { color: var(--muted); font-size: 0.8rem; padding: 0.75rem 0; }
 
-        .toast-container {
-            position: fixed;
-            bottom: 2rem;
-            right: 2rem;
-            display: flex;
-            flex-direction: column;
-            gap: 1rem;
-        }
-
-        .toast {
-            background: rgba(30, 41, 59, 0.9);
-            border: 1px solid var(--border);
-            padding: 1rem 1.5rem;
-            border-radius: 12px;
-            backdrop-filter: blur(8px);
-            animation: slideIn 0.3s ease-out;
-        }
-
-        @keyframes slideIn {
-            from { transform: translateX(100%); opacity: 0; }
-            to { transform: translateX(0); opacity: 1; }
-        }
-
-        /* Modal Styles */
+        /* Modal */
         .modal-overlay {
             position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(15, 23, 42, 0.8);
-            backdrop-filter: blur(8px);
+            inset: 0;
+            background: rgba(11, 17, 30, 0.85);
             display: none;
             justify-content: center;
             align-items: center;
             z-index: 1000;
+            padding: 1.5rem;
         }
-
         .modal {
-            background: var(--card-bg);
+            background: var(--panel);
             border: 1px solid var(--border);
-            border-radius: 20px;
-            padding: 2rem;
+            border-radius: 10px;
+            padding: 1.75rem;
             width: 100%;
-            max-width: 450px;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            max-width: 480px;
         }
-
-        .modal h2 {
-            font-family: 'Outfit', sans-serif;
-            margin-bottom: 1.5rem;
-            font-size: 1.25rem;
-        }
-
+        .modal h2 { font-size: 1.05rem; font-weight: 600; margin-bottom: 0.5rem; }
+        .modal .modal-desc { color: var(--text-2); font-size: 0.85rem; margin-bottom: 1.25rem; line-height: 1.5; }
         .modal select {
             width: 100%;
-            background: rgba(255, 255, 255, 0.05);
+            background: var(--card);
             border: 1px solid var(--border);
             color: var(--text);
-            padding: 0.75rem;
-            border-radius: 12px;
-            margin-bottom: 1.5rem;
+            padding: 0.6rem 0.75rem;
+            border-radius: 6px;
+            margin-bottom: 1.25rem;
             outline: none;
+            font-family: inherit;
+            font-size: 0.85rem;
+            font-variant-numeric: tabular-nums;
         }
+        .modal select:focus { border-color: var(--primary); }
+        .modal select option { background: var(--card); }
+        .modal-actions { display: flex; justify-content: flex-end; gap: 0.6rem; }
 
-        .modal select option {
-            background: var(--bg);
-        }
-
-        .modal-actions {
+        /* Toast */
+        .toast-container {
+            position: fixed;
+            bottom: 1.5rem;
+            right: 1.5rem;
             display: flex;
-            justify-content: flex-end;
-            gap: 1rem;
+            flex-direction: column;
+            gap: 0.6rem;
+            z-index: 2000;
+        }
+        .toast {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            padding: 0.7rem 1rem;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            animation: slideIn 0.2s ease-out;
+            min-width: 200px;
+        }
+        .toast.error { border-color: rgba(239, 68, 68, 0.4); }
+        @keyframes slideIn {
+            from { transform: translateX(20px); opacity: 0; }
+            to   { transform: translateX(0); opacity: 1; }
         }
     </style>
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>MongoDB CrashSafe</h1>
+            <div class="brand">
+                <h1>CrashSafe</h1>
+                <span class="tag">MongoDB Backup</span>
+            </div>
             <div id="scheduler-status" class="status-badge">Active</div>
         </header>
 
-        <div class="grid">
-            <div class="card">
-                <h3>Schedule</h3>
-                <div id="cron-val" class="value">-</div>
-                <div class="sub">Cron pattern</div>
+        <div id="inflight" class="inflight">
+            <div class="title">Backup in progress</div>
+            <div class="meta" id="inflight-meta">—</div>
+            <div class="progress-bar"><div id="inflight-progress" style="width:0%"></div></div>
+        </div>
+
+        <div class="section-title">Overview</div>
+        <div class="stat-grid">
+            <div class="stat-card">
+                <div class="label">Schedule</div>
+                <div id="cron-val" class="value">—</div>
+                <div class="sub">Cron expression</div>
             </div>
-            <div class="card">
-                <h3>Last Run</h3>
-                <div id="last-run-val" class="value">-</div>
-                <div id="last-status-val" class="sub">No runs yet</div>
+            <div class="stat-card">
+                <div class="label">Last Scheduled Run</div>
+                <div id="last-scheduled-val" class="value">Never</div>
+                <div id="last-scheduled-sub" class="sub">No runs yet</div>
             </div>
-            <div id="database-cards" class="grid" style="grid-column: 1 / -1; margin-bottom: 0;">
-                <!-- DB cards inserted here -->
+            <div class="stat-card">
+                <div class="label">Last Manual Run</div>
+                <div id="last-manual-val" class="value">Never</div>
+                <div id="last-manual-sub" class="sub">No runs yet</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">Total Disk Usage</div>
+                <div id="total-disk-val" class="value">0 B</div>
+                <div id="total-disk-sub" class="sub">Across all backups</div>
             </div>
         </div>
 
+        <div class="section-title">Databases</div>
+        <div id="database-cards" class="db-grid">
+            <!-- DB cards inserted here -->
+        </div>
     </div>
 
     <div id="restore-modal" class="modal-overlay">
         <div class="modal">
-            <h2>Select Starting Backup</h2>
-            <p style="color: var(--secondary); font-size: 0.875rem; margin-bottom: 1rem;">Choose which backup to start replaying from (incremental).</p>
+            <h2>Restore from a specific point</h2>
+            <p class="modal-desc">
+                Replays every backup from the selected entry up to the latest, applying changes on top of the current data. Existing collections are <strong>not dropped</strong> — modified or deleted documents from the chain are corrected in place.
+            </p>
             <select id="backup-select"></select>
             <div class="modal-actions">
                 <button onclick="closeRestoreModal()" class="btn btn-secondary">Cancel</button>
@@ -310,13 +512,13 @@
         let lastStatusData = null;
         let activeRestoreTarget = null;
 
-        function showToast(message) {
+        function showToast(message, kind) {
             const container = document.getElementById('toast-container');
             const toast = document.createElement('div');
-            toast.className = 'toast';
+            toast.className = 'toast' + (kind === 'error' ? ' error' : '');
             toast.textContent = message;
             container.appendChild(toast);
-            setTimeout(() => toast.remove(), 3000);
+            setTimeout(() => toast.remove(), 3500);
         }
 
         async function triggerAction(url, body) {
@@ -330,35 +532,40 @@
                     showToast('Action triggered');
                 } else {
                     const data = await res.json().catch(() => ({}));
-                    showToast('Error: ' + (data.error || 'Action failed'));
+                    showToast('Error: ' + (data.error || 'Action failed'), 'error');
                 }
             } catch (err) {
-                showToast('Network error');
+                showToast('Network error', 'error');
             }
         }
 
-        function confirmRestore(target) {
-            if (confirm(`Warning: This will WIPE the ${target} database and restore from the full chain. Are you absolutely sure?`)) {
-                triggerAction('/api/trigger/restore', {type: 'full', target});
+        function confirmWipeRestore(target) {
+            const msg = 'WIPE & RESTORE — ' + target.toUpperCase() + '\n\n'
+                      + 'This will DROP every collection in the "' + target + '" database, then replay the entire backup chain '
+                      + 'from the first full backup to the latest entry.\n\n'
+                      + 'All current data in this database will be lost. Backups themselves are not affected.\n\n'
+                      + 'Are you absolutely sure?';
+            if (confirm(msg)) {
+                triggerAction('/api/trigger/restore', { type: 'full', target });
             }
         }
 
         function openRestoreModal(target) {
-            if (!lastStatusData) return showToast('No data available');
+            if (!lastStatusData) return showToast('No data available', 'error');
             const db = lastStatusData.backups.find(b => b.type === target);
-            if (!db || !db.history.length) return showToast('No backup history for ' + target);
-            
+            if (!db || !db.history.length) return showToast('No backup history for ' + target, 'error');
+
             activeRestoreTarget = target;
             const select = document.getElementById('backup-select');
             select.innerHTML = '';
-            
+
             db.history.forEach(h => {
                 const opt = document.createElement('option');
                 opt.value = h.id;
-                opt.textContent = new Date(h.id).toLocaleString() + (h.type === 'full' ? ' (Full)' : '');
+                opt.textContent = new Date(h.id).toLocaleString() + (h.type === 'full' ? '  ·  Full' : '  ·  Incremental');
                 select.appendChild(opt);
             });
-            
+
             document.getElementById('restore-modal').style.display = 'flex';
         }
 
@@ -371,47 +578,162 @@
             const select = document.getElementById('backup-select');
             const sinceId = select.value;
             if (!sinceId || !activeRestoreTarget) return;
-            
             triggerAction('/api/trigger/restore', { type: 'incremental', sinceId, target: activeRestoreTarget });
             closeRestoreModal();
         }
 
+        function formatBytes(bytes) {
+            if (bytes == null || isNaN(bytes)) return '—';
+            if (bytes === 0) return '0 B';
+            const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+            const v = bytes / Math.pow(1024, i);
+            return (v >= 100 ? v.toFixed(0) : v.toFixed(1)) + ' ' + units[i];
+        }
+
+        function formatRunCard(run) {
+            if (!run) return { value: 'Never', sub: 'No runs yet', color: 'var(--text-2)' };
+            const when = new Date(run.finishedAt || run.startedAt);
+            const ago = Math.round((Date.now() - when.getTime()) / 1000);
+            let agoStr;
+            if (ago < 60) agoStr = ago + 's ago';
+            else if (ago < 3600) agoStr = Math.round(ago / 60) + 'm ago';
+            else if (ago < 86400) agoStr = Math.round(ago / 3600) + 'h ago';
+            else agoStr = Math.round(ago / 86400) + 'd ago';
+
+            const color = run.status === 'error' ? 'var(--error)'
+                        : run.status === 'success' ? 'var(--success)'
+                        : 'var(--text-2)';
+            const sub = (run.status || '').toUpperCase() + (run.trigger ? ' · ' + run.trigger : '');
+            return { value: agoStr, sub, color };
+        }
+
+        function updateInFlight(data) {
+            const banner = document.getElementById('inflight');
+            if (!data.inFlight) {
+                banner.classList.remove('active');
+                return;
+            }
+            banner.classList.add('active');
+            const f = data.inFlight;
+            const since = f.startedAt ? new Date(f.startedAt) : null;
+            const elapsed = since ? Math.round((Date.now() - since.getTime()) / 1000) : 0;
+            const elapsedStr = elapsed < 60 ? elapsed + 's'
+                            : elapsed < 3600 ? Math.round(elapsed / 60) + 'm ' + (elapsed % 60) + 's'
+                            : Math.round(elapsed / 3600) + 'h ' + Math.round((elapsed % 3600) / 60) + 'm';
+
+            const parts = [];
+            parts.push('Trigger: <strong>' + (f.trigger || 'unknown') + '</strong>');
+            parts.push('Started: ' + (since ? since.toLocaleTimeString() : '—') + ' (' + elapsedStr + ' ago)');
+            if (f.pid) parts.push('PID ' + f.pid);
+            if (f.currentDb && f.currentCollection) {
+                parts.push('Working on: <strong>' + f.currentDb + ' / ' + f.currentCollection + '</strong>');
+            }
+            if (typeof f.processedCollections === 'number' && typeof f.totalCollections === 'number') {
+                parts.push((f.processedCollections + 1) + ' / ' + f.totalCollections + ' collections');
+            }
+            document.getElementById('inflight-meta').innerHTML = parts.join(' · ');
+
+            const pct = (f.totalCollections && f.totalCollections > 0)
+                ? Math.min(100, Math.round((f.processedCollections / f.totalCollections) * 100))
+                : 0;
+            document.getElementById('inflight-progress').style.width = pct + '%';
+        }
+
         function updateUI(data) {
             lastStatusData = data;
-            document.getElementById('cron-val').textContent = data.scheduler.cron;
-            document.getElementById('last-run-val').textContent = data.scheduler.lastRun 
-                ? new Date(data.scheduler.lastRun).toLocaleTimeString() 
-                : 'Never';
-            
-            const lastStatusEl = document.getElementById('last-status-val');
-            lastStatusEl.textContent = data.scheduler.lastStatus ? 'Status: ' + data.scheduler.lastStatus : 'No status';
-            lastStatusEl.style.color = data.scheduler.lastStatus === 'error' ? 'var(--error)' : 'var(--secondary)';
 
+            // Schedule + scheduler badge
+            document.getElementById('cron-val').textContent = data.scheduler.cron;
             const statusBadge = document.getElementById('scheduler-status');
             statusBadge.textContent = data.scheduler.running ? 'Active' : 'Stopped';
-            statusBadge.className = 'status-badge ' + (data.scheduler.lastStatus === 'running' ? 'running' : '');
+            statusBadge.className = 'status-badge ' + (data.inFlight ? 'running' : '');
 
+            // Last Scheduled / Manual cards
+            const sched = formatRunCard(data.runs?.scheduled);
+            document.getElementById('last-scheduled-val').textContent = sched.value;
+            const ssub = document.getElementById('last-scheduled-sub');
+            ssub.textContent = sched.sub;
+            ssub.style.color = sched.color;
+
+            const man = formatRunCard(data.runs?.manual);
+            document.getElementById('last-manual-val').textContent = man.value;
+            const msub = document.getElementById('last-manual-sub');
+            msub.textContent = man.sub;
+            msub.style.color = man.color;
+
+            // Total disk usage
+            const totalDisk = data.backups.reduce((s, db) => s + (db.totalSize || 0), 0);
+            const totalCount = data.backups.reduce((s, db) => s + (db.count || 0), 0);
+            document.getElementById('total-disk-val').textContent = formatBytes(totalDisk);
+            document.getElementById('total-disk-sub').textContent = totalCount + ' backups across ' + data.backups.length + ' database' + (data.backups.length === 1 ? '' : 's');
+
+            updateInFlight(data);
+
+            // DB cards
             const dbContainer = document.getElementById('database-cards');
             dbContainer.innerHTML = '';
             data.backups.forEach(db => {
                 const card = document.createElement('div');
-                card.className = 'card';
+                card.className = 'db-card';
+                const lastDate = db.lastBackup ? new Date(db.lastBackup) : null;
+                const lastWhen = lastDate
+                    ? lastDate.toLocaleDateString() + ' · ' + lastDate.toLocaleTimeString()
+                    : 'Never';
+
+                let historyHtml;
+                if (!db.history || !db.history.length) {
+                    historyHtml = '<div class="history-empty">No backups yet.</div>';
+                } else {
+                    const rows = db.history.slice(0, 50).map(h => {
+                        const date = new Date(h.id);
+                        const pillClass = h.type === 'full' ? 'full' : 'incremental';
+                        return '<tr>'
+                             + '<td>' + date.toLocaleString() + '</td>'
+                             + '<td><span class="pill ' + pillClass + '">' + h.type + '</span></td>'
+                             + '<td>' + h.collections + '</td>'
+                             + '<td>' + formatBytes(h.size) + '</td>'
+                             + '</tr>';
+                    }).join('');
+                    historyHtml = '<table class="history-table">'
+                                + '<thead><tr><th>When</th><th>Type</th><th>Collections</th><th>Size</th></tr></thead>'
+                                + '<tbody>' + rows + '</tbody></table>';
+                    if (db.history.length > 50) {
+                        historyHtml += '<div class="history-empty">Showing latest 50 of ' + db.history.length + '.</div>';
+                    }
+                }
+
                 card.innerHTML = `
-                    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1.5rem;">
+                    <div class="db-head">
                         <div>
-                            <h3>DB: ${db.name} (${db.type})</h3>
-                            <div class="value">${db.lastBackup ? new Date(db.lastBackup).toLocaleDateString() : 'N/A'}</div>
-                            <div class="sub">${db.count} backups available</div>
+                            <span class="db-name">${db.name}</span>
+                            <span class="db-type">${db.type}</span>
+                            <div class="db-meta">Last backup: ${lastWhen}</div>
+                        </div>
+                        <div class="db-stats">
+                            <strong>${db.count}</strong> backup${db.count === 1 ? '' : 's'}
+                            <div>${formatBytes(db.totalSize)} on disk</div>
                         </div>
                     </div>
-                    
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; border-top: 1px solid var(--border); padding-top: 1.5rem; margin-top: 1rem;">
-                        <div style="grid-column: 1 / -1; font-size: 0.75rem; text-transform: uppercase; color: var(--secondary); margin-bottom: 0.25rem;">Actions</div>
-                        <button onclick="triggerAction('/api/trigger/backup', {type: 'incremental', target: '${db.type}'})" class="btn btn-secondary" style="font-size: 0.75rem; padding: 0.5rem;">Inc Backup</button>
-                        <button onclick="triggerAction('/api/trigger/backup', {type: 'full', target: '${db.type}'})" class="btn btn-primary" style="font-size: 0.75rem; padding: 0.5rem;">Full Backup</button>
-                        <button onclick="openRestoreModal('${db.type}')" class="btn btn-secondary" style="font-size: 0.75rem; padding: 0.5rem;">Inc Restore</button>
-                        <button onclick="confirmRestore('${db.type}')" class="btn btn-secondary" style="font-size: 0.75rem; padding: 0.5rem; color: var(--error); border-color: rgba(239, 68, 68, 0.1);">Wipe & Restore</button>
+
+                    <div class="actions-row">
+                        <button onclick="triggerAction('/api/trigger/backup', {type: 'incremental', target: '${db.type}'})" class="btn btn-secondary">Incremental Backup</button>
+                        <button onclick="triggerAction('/api/trigger/backup', {type: 'full', target: '${db.type}'})" class="btn btn-primary">Full Backup</button>
+                        <button onclick="openRestoreModal('${db.type}')" class="btn btn-secondary">Restore from Point</button>
+                        <button onclick="confirmWipeRestore('${db.type}')" class="btn btn-danger">Wipe & Restore</button>
                     </div>
+
+                    <dl class="help-list">
+                        <div class="item"><dt>Incremental Backup</dt> <dd>— Captures only documents changed since the last backup, plus tracks any deletions. Fast and storage-light. Adds one entry to the chain.</dd></div>
+                        <div class="item"><dt>Full Backup</dt> <dd>— Re-dumps every document in this database from scratch. Slow and storage-heavy, but creates a clean checkpoint that future incrementals build on.</dd></div>
+                        <div class="item"><dt>Restore from Point</dt> <dd>— Replays the backup chain starting at a chosen entry. Existing data stays in place; modified or deleted documents from the chain are corrected. Use to roll forward from a known-good state without dropping data.</dd></div>
+                        <div class="item"><span class="danger-tag">Destructive</span><dt>Wipe & Restore</dt> <dd>— Drops every collection in this database, then replays the entire chain from the first full backup. Use only when you need to fully recover the database from backup.</dd></div>
+                    </dl>
+
+                    <details class="history">
+                        <summary>Backup history (${db.count})</summary>
+                        ${historyHtml}
+                    </details>
                 `;
                 dbContainer.appendChild(card);
             });

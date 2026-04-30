@@ -52,6 +52,8 @@ docker run -d --env-file .env -p 3000:3000 openinc-crashsafe
 | `OPENINC_MONGO_BACKUP_UI_PORT` | ❌ | `3000` | Port for the Web Dashboard |
 | `OPENINC_MONGO_BACKUP_COLLECTION_PREFIX` | ❌ | `sensors---` | Filter for data collections |
 | `OPENINC_MONGO_BACKUP_UPDATED_AT_FIELD` | ❌ | `updatedAt` | Field name for change detection |
+| `OPENINC_MONGO_BACKUP_AUTH_USER` | ❌ | — | Username for the dashboard's HTTP Basic Auth. Set together with `AUTH_PASSWORD` to enable auth; leave both unset to disable. |
+| `OPENINC_MONGO_BACKUP_AUTH_PASSWORD` | ❌ | — | Password for the dashboard's HTTP Basic Auth. |
 
 ---
 
@@ -59,6 +61,8 @@ docker run -d --env-file .env -p 3000:3000 openinc-crashsafe
 
 ### Web Dashboard
 Start the daemon and visit `http://localhost:3000`. You can monitor recent runs and trigger manual backups or restores per database.
+
+The dashboard is unauthenticated by default. To require login, set `OPENINC_MONGO_BACKUP_AUTH_USER` **and** `OPENINC_MONGO_BACKUP_AUTH_PASSWORD` — the server then enforces HTTP Basic Auth on every route (UI + API), and the browser shows its native login dialog. Setting only one of the two is rejected at startup, so the daemon can't silently boot without auth. Run the dashboard behind HTTPS (e.g. Coolify's reverse proxy) since Basic Auth credentials are base64-encoded, not encrypted.
 
 ### CLI Commands
 

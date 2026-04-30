@@ -38,6 +38,10 @@ const config = {
   get sensorConfigCollection() { return get('SENSOR_CONFIG_COLLECTION', 'config'); },
   get uiPort() { return parseInt(get('UI_PORT', '3000'), 10); },
   get updatedAtField() { return get('UPDATED_AT_FIELD', 'updatedAt'); },
+
+  // --- Web Dashboard auth (HTTP Basic). Both must be set to enable; both empty disables auth. ---
+  get authUser() { return get('AUTH_USER', null) || null; },
+  get authPassword() { return get('AUTH_PASSWORD', null) || null; },
 };
 
 module.exports = config;
