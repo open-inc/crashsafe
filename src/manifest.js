@@ -74,5 +74,5 @@ module.exports = { readManifest, writeManifest, appendBackupEntry, findEntry, ge
  * @property {string[]} collections  Collections with changes in this file
  * @property {string}   file         Dump directory name (relative to dbBackupDir)
  * @property {string}   trackingFile Tracking JSON filename (relative to dbBackupDir)
- * @property {string}   idFile       _id snapshot filename (relative to dbBackupDir/ids)
+ * @property {string}   idDir        _id snapshot directory (relative to dbBackupDir/ids); contains one <collection>.jsonl per collection
  */
