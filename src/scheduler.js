@@ -29,8 +29,13 @@ function start() {
         lastRun = new Date();
         lastStatus = 'running';
         try {
-            await runBackup({ full: false });
-            lastStatus = 'success';
+            const result = await runBackup({ full: false, trigger: 'scheduled' });
+            if (result?.skipped) {
+                lastStatus = 'skipped';
+                logger.warn({ reason: result.reason, holder: result.holder }, 'Scheduled backup skipped (another run in progress)');
+            } else {
+                lastStatus = 'success';
+            }
         } catch (err) {
             lastStatus = 'error';
             logger.error({ err }, 'Scheduled backup failed');

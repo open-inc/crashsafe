@@ -100,6 +100,19 @@ Backups are stored in `backups/<dbType>/<ID>/`.
 
 ---
 
+## Concurrency
+
+Only one backup runs at a time, even with a tight cron schedule, multiple manual API clicks, or a CLI invocation overlapping with the daemon.
+
+- **In-process mutex**: cron + API triggers within the daemon are serialized by an in-memory flag. If a backup is already running, the new trigger is **skipped** (logged as `skipped`) — it does not queue.
+- **Cross-process lockfile**: `<backupDir>/.backup.lock` (JSON: `{ pid, startedAt, trigger }`) is created atomically with `O_EXCL` and removed on completion. A second process (e.g. a CLI run while the daemon runs) sees the file and exits skipped.
+- **Stale lock recovery**: on startup, an existing lockfile is reclaimed if (a) the recorded PID is no longer alive, or (b) the lock is older than 24h. This handles SIGKILL / OOM / power-loss cases without manual cleanup.
+- **Clean shutdown**: SIGINT/SIGTERM and normal `process.exit` paths remove the lockfile via a `process.on('exit')` hook.
+
+If you ever need to force-clear the lock manually: `rm <backupDir>/.backup.lock`.
+
+---
+
 ## Resource Usage
 
 Initial full backups can touch hundreds of collections with millions of documents each. To keep both the Node process and `mongod` stable on memory-constrained servers, the backup loop is designed to hold as little as possible in RAM:

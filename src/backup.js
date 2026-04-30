@@ -15,6 +15,99 @@ const logger = require('./logger');
 
 const COLLECTION_PAUSE_MS = 300;
 const CURSOR_BATCH_SIZE = 1000;
+const LOCKFILE_NAME = '.backup.lock';
+const STALE_LOCK_THRESHOLD_MS = 24 * 60 * 60 * 1000;
+
+// ---------------------------------------------------------------------------
+// Concurrency control
+// ---------------------------------------------------------------------------
+
+let inFlight = null;
+let heldLockPath = null;
+
+function lockFilePath() {
+    return path.resolve(config.backupDir, LOCKFILE_NAME);
+}
+
+function isProcessAlive(pid) {
+    if (!pid || typeof pid !== 'number') return false;
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Try to atomically acquire the cross-process lockfile.
+ * Returns { ok: true } on success, or { ok: false, holder } when another
+ * live process holds it.
+ */
+function tryAcquireLock(trigger) {
+    const lockPath = lockFilePath();
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+
+    if (fs.existsSync(lockPath)) {
+        let lock = null;
+        try {
+            lock = JSON.parse(fs.readFileSync(lockPath, 'utf-8'));
+        } catch {
+            // Corrupted lockfile -> treat as stale
+        }
+        if (lock) {
+            const startedAt = new Date(lock.startedAt).getTime();
+            const ageMs = Number.isFinite(startedAt) ? Date.now() - startedAt : Infinity;
+            const alive = isProcessAlive(lock.pid);
+            if (alive && ageMs < STALE_LOCK_THRESHOLD_MS) {
+                return { ok: false, holder: lock };
+            }
+            logger.warn({ stalePid: lock.pid, alive, ageMs }, 'Stale backup lock detected, reclaiming');
+        }
+        try { fs.unlinkSync(lockPath); } catch (e) {
+            if (e.code !== 'ENOENT') throw e;
+        }
+    }
+
+    const payload = JSON.stringify({
+        pid: process.pid,
+        startedAt: new Date().toISOString(),
+        trigger,
+    });
+    try {
+        // 'wx' = O_CREAT | O_EXCL: atomically fail if a concurrent acquirer wrote first
+        fs.writeFileSync(lockPath, payload, { flag: 'wx', encoding: 'utf-8' });
+    } catch (err) {
+        if (err.code === 'EEXIST') {
+            return { ok: false, holder: null };
+        }
+        throw err;
+    }
+    heldLockPath = lockPath;
+    return { ok: true };
+}
+
+function releaseLock() {
+    if (!heldLockPath) return;
+    const p = heldLockPath;
+    heldLockPath = null;
+    try {
+        fs.unlinkSync(p);
+    } catch (err) {
+        if (err.code !== 'ENOENT') {
+            logger.warn({ err }, 'Failed to remove backup lock file');
+        }
+    }
+}
+
+// Synchronous safety net: if the process is exiting (clean shutdown or
+// uncaught exception that bubbles out), drop the lockfile so it isn't
+// stranded for the next process.
+process.on('exit', () => {
+    if (heldLockPath) {
+        try { fs.unlinkSync(heldLockPath); } catch { /* ignore */ }
+    }
+});
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -229,15 +322,37 @@ async function backupDb(dbName, dbType, forceFull, id) {
 // ---------------------------------------------------------------------------
 
 async function runBackup(opts = {}) {
-    const results = [];
-    const id = new Date().toISOString();
-    if ((!opts.target || opts.target === 'data' || opts.target === 'all') && config.dbData) {
-        results.push(await backupDb(config.dbData, 'data', opts.full ?? false, id));
+    const trigger = opts.trigger ?? 'unknown';
+
+    if (inFlight) {
+        logger.warn({ trigger }, 'Backup skipped: another backup is already running in this process');
+        return { skipped: true, reason: 'in-process' };
     }
-    if ((!opts.target || opts.target === 'parse' || opts.target === 'all') && config.dbParse) {
-        results.push(await backupDb(config.dbParse, 'parse', opts.full ?? false, id));
+
+    const acquired = tryAcquireLock(trigger);
+    if (!acquired.ok) {
+        logger.warn({ trigger, holder: acquired.holder }, 'Backup skipped: another process holds the lock');
+        return { skipped: true, reason: 'cross-process', holder: acquired.holder };
     }
-    return results;
+
+    inFlight = (async () => {
+        try {
+            const results = [];
+            const id = new Date().toISOString();
+            if ((!opts.target || opts.target === 'data' || opts.target === 'all') && config.dbData) {
+                results.push(await backupDb(config.dbData, 'data', opts.full ?? false, id));
+            }
+            if ((!opts.target || opts.target === 'parse' || opts.target === 'all') && config.dbParse) {
+                results.push(await backupDb(config.dbParse, 'parse', opts.full ?? false, id));
+            }
+            return results;
+        } finally {
+            releaseLock();
+            inFlight = null;
+        }
+    })();
+
+    return inFlight;
 }
 
 module.exports = { runBackup };

@@ -68,10 +68,16 @@ const requestHandler = async (req, res) => {
                 const isFull = data.type === 'full';
                 const target = data.target || 'all';
                 logger.info({ isFull, target }, 'Manual backup triggered via API');
-                
+
                 // Run in background to avoid blocking response
-                runBackup({ full: isFull, target }).catch(err => logger.error({ err }, 'Manual backup failed'));
-                
+                runBackup({ full: isFull, target, trigger: 'api' })
+                    .then((result) => {
+                        if (result?.skipped) {
+                            logger.warn({ reason: result.reason, holder: result.holder }, 'Manual backup skipped (another run in progress)');
+                        }
+                    })
+                    .catch(err => logger.error({ err }, 'Manual backup failed'));
+
                 res.writeHead(202, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ message: 'Backup started' }));
             } catch (err) {

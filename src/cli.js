@@ -24,8 +24,12 @@ program
     .option('--full', 'Force a full backup instead of incremental', false)
     .action(async (opts) => {
         try {
-            const results = await runBackup({ full: opts.full });
-            for (const r of results) {
+            const result = await runBackup({ full: opts.full, trigger: 'cli' });
+            if (result?.skipped) {
+                logger.warn({ reason: result.reason, holder: result.holder }, 'Backup skipped: another run is already in progress');
+                process.exit(1);
+            }
+            for (const r of result) {
                 logger.info(r, 'Backup finished');
             }
             process.exit(0);
