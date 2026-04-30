@@ -121,6 +121,7 @@ Initial full backups can touch hundreds of collections with millions of document
 - **Per-collection snapshot files**: Each collection's IDs go into its own `ids/<ID>/<collection>.jsonl` so neither writing nor reading needs to load all collections at once. Delete detection streams the previous run's file through `readline`, holding only the *current* collection's IDs in memory at any time.
 - **Streaming upsert detection**: The list of changed `_id`s for the tracking file is also collected via cursor iteration, not `.toArray()`.
 - **Pause between collections**: A 300 ms `sleep` after each collection gives MongoDB's WiredTiger cache time to evict pages and write checkpoints before the next dump starts.
+- **Hard Node heap cap (Docker)**: The `Dockerfile` launches Node with `--max-old-space-size=1024`, so a runaway backup OOMs Node cleanly with a stack trace instead of letting the Linux OOM killer pick `mongod`.
 
 If you still see `mongod` getting killed during the initial full run, the bottleneck is almost certainly MongoDB's own WiredTiger cache. Pin it explicitly in your `mongod.conf`:
 
