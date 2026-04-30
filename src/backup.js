@@ -5,7 +5,7 @@ const readline = require('node:readline');
 const { BSON: { EJSON } } = require('mongodb');
 const { execFile } = require('node:child_process');
 const { getDb, disconnect } = require('./db');
-const { appendBackupEntry, readManifest, computeBackupSize } = require('./manifest');
+const { appendBackupEntry, readManifest, writeManifest, computeBackupSize } = require('./manifest');
 const config = require('./config');
 const logger = require('./logger');
 
@@ -231,7 +231,7 @@ function runMongoDump(uri, dbName, collName, query, outDir) {
 // Core backup for a single database
 // ---------------------------------------------------------------------------
 
-async function backupDb(dbName, dbType, forceFull, id) {
+async function backupDb(dbName, dbType, forceFull, id, trigger) {
     const dir = dbBackupDir(dbType);
     fs.mkdirSync(dir, { recursive: true });
 
@@ -361,6 +361,8 @@ async function backupDb(dbName, dbType, forceFull, id) {
         trackingFile: trackingData.length > 0 ? `${slug}.tracking.json` : null,
         idDir: slug,
         size,
+        trigger: trigger ?? 'unknown',
+        finishedAt: new Date().toISOString(),
     });
 
     logger.info(
@@ -395,10 +397,10 @@ async function runBackup(opts = {}) {
             const results = [];
             const id = new Date().toISOString();
             if ((!opts.target || opts.target === 'data' || opts.target === 'all') && config.dbData) {
-                results.push(await backupDb(config.dbData, 'data', opts.full ?? false, id));
+                results.push(await backupDb(config.dbData, 'data', opts.full ?? false, id, trigger));
             }
             if ((!opts.target || opts.target === 'parse' || opts.target === 'all') && config.dbParse) {
-                results.push(await backupDb(config.dbParse, 'parse', opts.full ?? false, id));
+                results.push(await backupDb(config.dbParse, 'parse', opts.full ?? false, id, trigger));
             }
             lastRuns[triggerKind] = {
                 trigger,
@@ -425,4 +427,94 @@ async function runBackup(opts = {}) {
     return inFlight;
 }
 
-module.exports = { runBackup, getRunStats };
+// ---------------------------------------------------------------------------
+// Startup tasks — restore in-memory state from on-disk manifests
+// ---------------------------------------------------------------------------
+
+function configuredDbTypes() {
+    const types = [];
+    if (config.dbData) types.push('data');
+    if (config.dbParse) types.push('parse');
+    return types;
+}
+
+/**
+ * One-shot pass that fills in `size` for any manifest entry that doesn't have
+ * one yet (legacy entries from before size tracking, or interrupted runs that
+ * left dump files but no size value). Safe to run on every daemon start; only
+ * touches entries where `size` is missing.
+ */
+function backfillSizes() {
+    for (const dbType of configuredDbTypes()) {
+        const dir = dbBackupDir(dbType);
+        let manifest;
+        try {
+            manifest = readManifest(dir);
+        } catch (err) {
+            logger.warn({ err, dbType }, 'Could not read manifest during backfill; skipping');
+            continue;
+        }
+
+        let updated = 0;
+        for (const entry of manifest.backups) {
+            if (typeof entry.size === 'number') continue;
+            try {
+                const slug = entry.id.replace(/[:.]/g, '-');
+                entry.size = computeBackupSize(dir, slug);
+                updated++;
+            } catch (err) {
+                logger.warn({ err, id: entry.id }, 'Failed to backfill size for entry');
+            }
+        }
+
+        if (updated > 0) {
+            try {
+                writeManifest(dir, manifest);
+                logger.info({ dbType, updated }, 'Backfilled missing sizes in manifest');
+            } catch (err) {
+                logger.warn({ err, dbType }, 'Failed to write back manifest after backfill');
+            }
+        }
+    }
+}
+
+/**
+ * Seed the in-memory `lastRuns` from the most recent successful entries on
+ * disk so the dashboard isn't empty after a daemon restart. Entries from older
+ * versions without a `trigger` field are skipped — they'll be replaced by the
+ * next run.
+ */
+function seedLastRuns() {
+    const allEntries = [];
+    for (const dbType of configuredDbTypes()) {
+        try {
+            const manifest = readManifest(dbBackupDir(dbType));
+            allEntries.push(...manifest.backups);
+        } catch { /* missing manifest is fine */ }
+    }
+
+    // Sort newest first by ISO id.
+    allEntries.sort((a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
+
+    for (const entry of allEntries) {
+        if (!entry.trigger) continue;
+        const kind = (entry.trigger === 'scheduled') ? 'scheduled' : 'manual';
+        if (!lastRuns[kind]) {
+            lastRuns[kind] = {
+                trigger: entry.trigger,
+                startedAt: entry.id,
+                finishedAt: entry.finishedAt ?? entry.id,
+                status: 'success',
+            };
+        }
+        if (lastRuns.scheduled && lastRuns.manual) break;
+    }
+}
+
+/** Run all daemon-startup tasks. CLI invocations should NOT call this. */
+function runStartupTasks() {
+    backfillSizes();
+    seedLastRuns();
+}
+
+module.exports = { runBackup, getRunStats, runStartupTasks };

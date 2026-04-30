@@ -18,6 +18,16 @@ if (args.length && CLI_COMMANDS.some((cmd) => args[0] === cmd || args[0].startsW
 } else {
     // Daemon mode — start scheduler and UI server
     logger.info('Starting OpenInc Backup Daemon');
+
+    // Restore dashboard state from on-disk manifests (sizes + lastRuns) before
+    // the UI comes up so /api/status doesn't briefly serve empty data.
+    const { runStartupTasks } = require('./backup');
+    try {
+        runStartupTasks();
+    } catch (err) {
+        logger.warn({ err }, 'Startup tasks failed; continuing anyway');
+    }
+
     scheduler.start();
     server.start();
 

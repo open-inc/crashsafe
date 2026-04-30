@@ -23,16 +23,28 @@ function dirSize(dir) {
 }
 
 /**
- * Total bytes a single backup occupies on disk: dump dir + tracking file + ids dir.
+ * Total bytes a single backup occupies on disk: dump dir + tracking file + ids
+ * (covers both the new per-collection JSONL directory and the legacy single-file
+ * snapshot, so backfill works on entries written by older versions too).
  */
 function computeBackupSize(dbBackupDir, slug) {
     let total = 0;
     total += dirSize(path.join(dbBackupDir, slug));
+
     const trackingFile = path.join(dbBackupDir, `${slug}.tracking.json`);
     if (fs.existsSync(trackingFile)) {
         try { total += fs.statSync(trackingFile).size; } catch { /* ignore */ }
     }
+
+    // New format: ids/<slug>/<col>.jsonl directory.
     total += dirSize(path.join(dbBackupDir, 'ids', slug));
+
+    // Legacy format: ids/<slug>.json single file.
+    const legacyIds = path.join(dbBackupDir, 'ids', `${slug}.json`);
+    if (fs.existsSync(legacyIds)) {
+        try { total += fs.statSync(legacyIds).size; } catch { /* ignore */ }
+    }
+
     return total;
 }
 
@@ -107,5 +119,7 @@ module.exports = { readManifest, writeManifest, appendBackupEntry, findEntry, ge
  * @property {string}   file         Dump directory name (relative to dbBackupDir)
  * @property {string}   trackingFile Tracking JSON filename (relative to dbBackupDir)
  * @property {string}   idDir        _id snapshot directory (relative to dbBackupDir/ids); contains one <collection>.jsonl per collection
- * @property {number}   [size]       Total disk usage of this backup in bytes (dump + tracking + id snapshot). Optional for entries written before size tracking existed.
+ * @property {number}   [size]       Total disk usage of this backup in bytes (dump + tracking + id snapshot). Optional for entries written before size tracking existed; backfilled lazily on daemon start.
+ * @property {string}   [trigger]    Origin of the run that wrote this entry: 'scheduled' | 'api' | 'cli'. Optional for entries written before trigger persistence existed.
+ * @property {string}   [finishedAt] ISO timestamp when this DB's portion of the run completed. Optional for entries written before this field existed.
  */
