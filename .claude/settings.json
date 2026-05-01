@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -c /Users/nico/Developer/Security/crashsafe/local-test/testapp/server.js)",
+      "Bash(node -e ' *)",
+      "Bash(node -c /Users/nico/Developer/Security/crashsafe/src/locking.js)",
+      "Bash(node -c /Users/nico/Developer/Security/crashsafe/src/restore.js)"
+    ]
+  }
+}

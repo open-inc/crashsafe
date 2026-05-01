@@ -39,6 +39,14 @@ const config = {
   get uiPort() { return parseInt(get('UI_PORT', '3000'), 10); },
   get updatedAtField() { return get('UPDATED_AT_FIELD', 'updatedAt'); },
 
+  // --- Append-only mode per DB. Default: false → full delete tracking (current behaviour).
+  // When true: skips per-collection ID enumeration on incrementals — massively faster
+  // for high-volume append-only workloads (e.g. sensor streams) at the cost of NOT
+  // detecting deletions. The data DB's config collection is exempt: it always keeps
+  // full delete tracking regardless of this setting. ---
+  get appendOnlyData() { return get('APPEND_ONLY_DATA', '').toLowerCase() === 'true'; },
+  get appendOnlyParse() { return get('APPEND_ONLY_PARSE', '').toLowerCase() === 'true'; },
+
   // --- Web Dashboard auth (HTTP Basic). Both must be set to enable; both empty disables auth. ---
   get authUser() { return get('AUTH_USER', null) || null; },
   get authPassword() { return get('AUTH_PASSWORD', null) || null; },

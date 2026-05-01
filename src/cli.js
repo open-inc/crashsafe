@@ -59,7 +59,11 @@ program
     )
     .action(async (backupId, opts) => {
         try {
-            await runRestore(opts.target, backupId ?? null, opts.full, opts.since ?? null, opts.dropExisting ?? false);
+            const result = await runRestore(opts.target, backupId ?? null, opts.full, opts.since ?? null, opts.dropExisting ?? false, 'cli');
+            if (result?.skipped) {
+                logger.warn({ reason: result.reason, holder: result.holder }, 'Restore skipped: another operation is already in progress');
+                process.exit(1);
+            }
             process.exit(0);
         } catch (err) {
             logger.error({ err }, 'Restore failed');
@@ -126,6 +130,14 @@ OPENINC_MONGO_BACKUP_SENSOR_CONFIG_COLLECTION=config
 # --- Change Detection Options ---
 # Field name used for change detection (default: updatedAt)
 OPENINC_MONGO_BACKUP_UPDATED_AT_FIELD=updatedAt
+
+# --- Append-Only Mode (per database) ---
+# Skips ID enumeration + delete detection for that DB on incrementals — much faster
+# for hot append-only streams (sensors), at the cost of not capturing deletions.
+# The data DB's config collection is exempt and always keeps full tracking.
+# Default: false (full delete tracking).
+# OPENINC_MONGO_BACKUP_APPEND_ONLY_DATA=false
+# OPENINC_MONGO_BACKUP_APPEND_ONLY_PARSE=false
 
 # --- UI Options ---
 # Port for the Web Dashboard (default: 3000)

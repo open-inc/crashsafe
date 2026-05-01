@@ -107,11 +107,8 @@
         /* Stat grid */
         .stat-grid {
             display: grid;
-            grid-template-columns: repeat(4, 1fr);
+            grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
             gap: 1rem;
-        }
-        @media (max-width: 900px) {
-            .stat-grid { grid-template-columns: repeat(2, 1fr); }
         }
 
         .stat-card {
@@ -277,6 +274,33 @@
             color: var(--error);
             margin-right: 0.4rem;
         }
+        .help-list .mono {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 0.78rem;
+            background: rgba(255,255,255,0.04);
+            padding: 0 0.25rem;
+            border-radius: 3px;
+        }
+        .restore-note {
+            margin-top: 0.6rem;
+            padding: 0.7rem 0.9rem;
+            background: rgba(99, 102, 241, 0.05);
+            border: 1px solid rgba(99, 102, 241, 0.2);
+            border-left: 2px solid var(--accent);
+            border-radius: 6px;
+            font-size: 0.76rem;
+            color: var(--text-2);
+            line-height: 1.55;
+        }
+        .restore-note strong { color: #c7d2fe; font-weight: 600; }
+        .restore-note .mono {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 0.74rem;
+            background: rgba(255,255,255,0.04);
+            padding: 0 0.3rem;
+            border-radius: 3px;
+            color: var(--text);
+        }
 
         /* In-flight banner */
         .inflight {
@@ -320,6 +344,16 @@
             background: var(--accent);
             transition: width 0.4s ease;
         }
+
+        /* Restore variant — orange accent so it's visually distinct from a backup. */
+        .inflight.restore {
+            background: rgba(245, 158, 11, 0.08);
+            border-color: rgba(245, 158, 11, 0.3);
+            border-left-color: var(--warning);
+        }
+        .inflight.restore .title { color: #fcd34d; }
+        .inflight.restore .title::before { background: var(--warning); }
+        .inflight.restore .progress-bar > div { background: var(--warning); }
 
         /* History table */
         details.history {
@@ -439,7 +473,15 @@
             animation: slideIn 0.2s ease-out;
             min-width: 200px;
         }
-        .toast.error { border-color: rgba(239, 68, 68, 0.4); }
+        .toast.error   { border-color: rgba(239, 68, 68, 0.4); }
+        .toast.success { border-color: rgba(16, 185, 129, 0.45); }
+        .toast .label-tag {
+            font-weight: 600; font-size: 0.7rem;
+            text-transform: uppercase; letter-spacing: 0.05em;
+            margin-right: 0.35rem;
+        }
+        .toast.success .label-tag { color: var(--success); }
+        .toast.error   .label-tag { color: var(--error); }
         @keyframes slideIn {
             from { transform: translateX(20px); opacity: 0; }
             to   { transform: translateX(0); opacity: 1; }
@@ -480,6 +522,11 @@
                 <div id="last-manual-sub" class="sub">No runs yet</div>
             </div>
             <div class="stat-card">
+                <div class="label">Last Restore</div>
+                <div id="last-restore-val" class="value">Never</div>
+                <div id="last-restore-sub" class="sub">No restores yet</div>
+            </div>
+            <div class="stat-card">
                 <div class="label">Total Disk Usage</div>
                 <div id="total-disk-val" class="value">0 B</div>
                 <div id="total-disk-sub" class="sub">Across all backups</div>
@@ -494,9 +541,10 @@
 
     <div id="restore-modal" class="modal-overlay">
         <div class="modal">
-            <h2>Restore from a specific point</h2>
+            <h2>Restore to a point in time</h2>
             <p class="modal-desc">
-                Replays every backup from the selected entry up to the latest, applying changes on top of the current data. Existing collections are <strong>not dropped</strong> — modified or deleted documents from the chain are corrected in place.
+                <strong style="color: var(--error);">Destructive.</strong>
+                Drops every collection in the selected database, then replays the backup chain up to and including the chosen entry. The database will reflect the exact state captured at that point — anything written after it is lost.
             </p>
             <select id="backup-select"></select>
             <div class="modal-actions">
@@ -512,13 +560,35 @@
         let lastStatusData = null;
         let activeRestoreTarget = null;
 
+        // Persist which DB cards have their history details expanded across re-renders,
+        // so a 3-second poll doesn't snap them shut while the user is reading.
+        const openHistoryFor = new Set();
+        document.addEventListener('toggle', (ev) => {
+            const det = ev.target;
+            if (!(det instanceof HTMLElement) || !det.matches('details.history')) return;
+            const card = det.closest('.db-card');
+            const dbType = card?.dataset?.dbType;
+            if (!dbType) return;
+            if (det.open) openHistoryFor.add(dbType);
+            else openHistoryFor.delete(dbType);
+        }, true);
+
         function showToast(message, kind) {
             const container = document.getElementById('toast-container');
             const toast = document.createElement('div');
-            toast.className = 'toast' + (kind === 'error' ? ' error' : '');
-            toast.textContent = message;
+            const cls = kind === 'error' ? ' error' : (kind === 'success' ? ' success' : '');
+            toast.className = 'toast' + cls;
+            const tag = kind === 'success' ? 'Done · ' : (kind === 'error' ? 'Error · ' : '');
+            if (tag) {
+                const tagEl = document.createElement('span');
+                tagEl.className = 'label-tag';
+                tagEl.textContent = tag;
+                toast.appendChild(tagEl);
+            }
+            toast.appendChild(document.createTextNode(message));
             container.appendChild(toast);
-            setTimeout(() => toast.remove(), 3500);
+            const dwell = kind === 'success' ? 5000 : 3500;
+            setTimeout(() => toast.remove(), dwell);
         }
 
         async function triggerAction(url, body) {
@@ -540,11 +610,10 @@
         }
 
         function confirmWipeRestore(target) {
-            const msg = 'WIPE & RESTORE — ' + target.toUpperCase() + '\n\n'
-                      + 'This will DROP every collection in the "' + target + '" database, then replay the entire backup chain '
-                      + 'from the first full backup to the latest entry.\n\n'
+            const msg = 'RESTORE TO LATEST — ' + target.toUpperCase() + '\n\n'
+                      + 'This will DROP every collection in the "' + target + '" database, then replay the chain up to the most recent backup.\n\n'
                       + 'All current data in this database will be lost. Backups themselves are not affected.\n\n'
-                      + 'Are you absolutely sure?';
+                      + 'Continue?';
             if (confirm(msg)) {
                 triggerAction('/api/trigger/restore', { type: 'full', target });
             }
@@ -576,9 +645,15 @@
 
         function triggerRestoreFromModal() {
             const select = document.getElementById('backup-select');
-            const sinceId = select.value;
-            if (!sinceId || !activeRestoreTarget) return;
-            triggerAction('/api/trigger/restore', { type: 'incremental', sinceId, target: activeRestoreTarget });
+            const backupId = select.value;
+            if (!backupId || !activeRestoreTarget) return;
+            const when = new Date(backupId).toLocaleString();
+            const msg = 'RESTORE TO POINT — ' + activeRestoreTarget.toUpperCase() + '\n\n'
+                      + 'This will DROP every collection in "' + activeRestoreTarget + '", then replay the backup chain up to ' + when + '.\n\n'
+                      + 'Anything written after that point will be lost.\n\n'
+                      + 'Continue?';
+            if (!confirm(msg)) return;
+            triggerAction('/api/trigger/restore', { type: 'full', backupId, target: activeRestoreTarget });
             closeRestoreModal();
         }
 
@@ -608,14 +683,82 @@
             return { value: agoStr, sub, color };
         }
 
+        function formatRestoreCard(restore) {
+            if (!restore) return { value: 'Never', sub: 'No restores yet', color: 'var(--text-2)' };
+            const when = new Date(restore.finishedAt || restore.startedAt);
+            const ago = Math.round((Date.now() - when.getTime()) / 1000);
+            let agoStr;
+            if (ago < 60) agoStr = ago + 's ago';
+            else if (ago < 3600) agoStr = Math.round(ago / 60) + 'm ago';
+            else if (ago < 86400) agoStr = Math.round(ago / 3600) + 'h ago';
+            else agoStr = Math.round(ago / 86400) + 'd ago';
+
+            const color = restore.status === 'error' ? 'var(--error)'
+                        : restore.status === 'success' ? 'var(--success)'
+                        : 'var(--text-2)';
+            const subParts = [(restore.status || '').toUpperCase()];
+            if (restore.mode) subParts.push(restore.mode);
+            if (restore.target) subParts.push(restore.target);
+            return { value: agoStr, sub: subParts.join(' · '), color };
+        }
+
+        // Track previous finishedAt timestamps so we can pop a toast when a new
+        // operation completes between polls.
+        const completionState = {
+            firstSeen: false,
+            scheduled: null,
+            manual: null,
+            restore: null,
+        };
+        function detectCompletions(data) {
+            const sched   = data.runs?.scheduled?.finishedAt ?? null;
+            const manual  = data.runs?.manual?.finishedAt    ?? null;
+            const restore = data.lastRestore?.finishedAt     ?? null;
+
+            if (completionState.firstSeen) {
+                if (sched !== completionState.scheduled && data.runs?.scheduled) {
+                    notifyCompletion('Scheduled backup', data.runs.scheduled);
+                }
+                if (manual !== completionState.manual && data.runs?.manual) {
+                    notifyCompletion('Manual backup', data.runs.manual);
+                }
+                if (restore !== completionState.restore && data.lastRestore) {
+                    notifyCompletion('Restore', data.lastRestore);
+                }
+            }
+            completionState.firstSeen = true;
+            completionState.scheduled = sched;
+            completionState.manual = manual;
+            completionState.restore = restore;
+        }
+        function notifyCompletion(label, info) {
+            if (info.status === 'success') {
+                showToast(label + ' completed successfully', 'success');
+            } else if (info.status === 'error') {
+                showToast(label + ' failed: ' + (info.error || 'unknown error'), 'error');
+            }
+        }
+
         function updateInFlight(data) {
             const banner = document.getElementById('inflight');
             if (!data.inFlight) {
-                banner.classList.remove('active');
+                banner.classList.remove('active', 'restore');
                 return;
             }
             banner.classList.add('active');
             const f = data.inFlight;
+            const isRestore = f.operation === 'restore';
+            banner.classList.toggle('restore', isRestore);
+
+            // Title
+            const titleEl = banner.querySelector('.title');
+            if (isRestore) {
+                titleEl.innerHTML = 'Restore in progress'
+                    + (f.dropExisting ? ' <span style="color: var(--error); font-size: 0.75rem; font-weight: 600;">· DESTRUCTIVE</span>' : '');
+            } else {
+                titleEl.textContent = 'Backup in progress';
+            }
+
             const since = f.startedAt ? new Date(f.startedAt) : null;
             const elapsed = since ? Math.round((Date.now() - since.getTime()) / 1000) : 0;
             const elapsedStr = elapsed < 60 ? elapsed + 's'
@@ -626,17 +769,34 @@
             parts.push('Trigger: <strong>' + (f.trigger || 'unknown') + '</strong>');
             parts.push('Started: ' + (since ? since.toLocaleTimeString() : '—') + ' (' + elapsedStr + ' ago)');
             if (f.pid) parts.push('PID ' + f.pid);
-            if (f.currentDb && f.currentCollection) {
-                parts.push('Working on: <strong>' + f.currentDb + ' / ' + f.currentCollection + '</strong>');
-            }
-            if (typeof f.processedCollections === 'number' && typeof f.totalCollections === 'number') {
-                parts.push((f.processedCollections + 1) + ' / ' + f.totalCollections + ' collections');
+
+            if (isRestore) {
+                if (f.target) parts.push('Target: <strong>' + f.target + '</strong>');
+                if (f.mode) parts.push('Mode: ' + f.mode);
+                if (f.phase) parts.push('Phase: <strong>' + f.phase + '</strong>');
+                if (f.currentDb && f.currentEntry) {
+                    parts.push('Replaying ' + f.currentDb + ' / ' + new Date(f.currentEntry).toLocaleString() + (f.currentEntryType ? ' (' + f.currentEntryType + ')' : ''));
+                }
+                if (typeof f.processedSteps === 'number' && typeof f.totalSteps === 'number' && f.totalSteps > 0) {
+                    parts.push((f.processedSteps + (f.phase === 'done' ? 0 : 1)) + ' / ' + f.totalSteps + ' steps');
+                }
+            } else {
+                if (f.currentDb && f.currentCollection) {
+                    parts.push('Working on: <strong>' + f.currentDb + ' / ' + f.currentCollection + '</strong>');
+                }
+                if (typeof f.processedCollections === 'number' && typeof f.totalCollections === 'number') {
+                    parts.push((f.processedCollections + 1) + ' / ' + f.totalCollections + ' collections');
+                }
             }
             document.getElementById('inflight-meta').innerHTML = parts.join(' · ');
 
-            const pct = (f.totalCollections && f.totalCollections > 0)
-                ? Math.min(100, Math.round((f.processedCollections / f.totalCollections) * 100))
-                : 0;
+            // Progress percentage
+            let pct = 0;
+            if (isRestore && f.totalSteps > 0) {
+                pct = Math.min(100, Math.round((f.processedSteps / f.totalSteps) * 100));
+            } else if (!isRestore && f.totalCollections > 0) {
+                pct = Math.min(100, Math.round((f.processedCollections / f.totalCollections) * 100));
+            }
             document.getElementById('inflight-progress').style.width = pct + '%';
         }
 
@@ -662,6 +822,16 @@
             msub.textContent = man.sub;
             msub.style.color = man.color;
 
+            // Last Restore card
+            const rest = formatRestoreCard(data.lastRestore);
+            document.getElementById('last-restore-val').textContent = rest.value;
+            const rsub = document.getElementById('last-restore-sub');
+            rsub.textContent = rest.sub;
+            rsub.style.color = rest.color;
+
+            // Detect completion transitions and pop a toast.
+            detectCompletions(data);
+
             // Total disk usage
             const totalDisk = data.backups.reduce((s, db) => s + (db.totalSize || 0), 0);
             const totalCount = data.backups.reduce((s, db) => s + (db.count || 0), 0);
@@ -676,6 +846,7 @@
             data.backups.forEach(db => {
                 const card = document.createElement('div');
                 card.className = 'db-card';
+                card.dataset.dbType = db.type;
                 const lastDate = db.lastBackup ? new Date(db.lastBackup) : null;
                 const lastWhen = lastDate
                     ? lastDate.toLocaleDateString() + ' · ' + lastDate.toLocaleTimeString()
@@ -719,18 +890,38 @@
                     <div class="actions-row">
                         <button onclick="triggerAction('/api/trigger/backup', {type: 'incremental', target: '${db.type}'})" class="btn btn-secondary">Incremental Backup</button>
                         <button onclick="triggerAction('/api/trigger/backup', {type: 'full', target: '${db.type}'})" class="btn btn-primary">Full Backup</button>
-                        <button onclick="openRestoreModal('${db.type}')" class="btn btn-secondary">Restore from Point</button>
-                        <button onclick="confirmWipeRestore('${db.type}')" class="btn btn-danger">Wipe & Restore</button>
+                        <button onclick="openRestoreModal('${db.type}')" class="btn btn-danger">Restore to Point</button>
+                        <button onclick="confirmWipeRestore('${db.type}')" class="btn btn-danger">Restore to Latest</button>
                     </div>
 
                     <dl class="help-list">
-                        <div class="item"><dt>Incremental Backup</dt> <dd>— Captures only documents changed since the last backup, plus tracks any deletions. Fast and storage-light. Adds one entry to the chain.</dd></div>
-                        <div class="item"><dt>Full Backup</dt> <dd>— Re-dumps every document in this database from scratch. Slow and storage-heavy, but creates a clean checkpoint that future incrementals build on.</dd></div>
-                        <div class="item"><dt>Restore from Point</dt> <dd>— Replays the backup chain starting at a chosen entry. Existing data stays in place; modified or deleted documents from the chain are corrected. Use to roll forward from a known-good state without dropping data.</dd></div>
-                        <div class="item"><span class="danger-tag">Destructive</span><dt>Wipe & Restore</dt> <dd>— Drops every collection in this database, then replays the entire chain from the first full backup. Use only when you need to fully recover the database from backup.</dd></div>
+                        <div class="item">
+                            <dt>Incremental Backup</dt>
+                            <dd>— Dumps only documents whose <span class="mono">updatedAt</span> changed since the previous entry, plus tracks any deletions. Fast, storage-light. Appends one link to the chain.</dd>
+                        </div>
+                        <div class="item">
+                            <dt>Full Backup</dt>
+                            <dd>— Re-dumps every document in this database from scratch. Slow and storage-heavy, but creates a fresh <strong>checkpoint</strong>: future restores can start from this point and ignore everything before it.</dd>
+                        </div>
+                        <div class="item">
+                            <span class="danger-tag">Destructive</span>
+                            <dt>Restore to Point</dt>
+                            <dd>— Drops every collection in this database, then replays the chain from the most recent Full at-or-before the chosen entry, up to and including that entry. Result: the database looks exactly like it did when the chosen backup was taken. <strong>Anything written after that point is lost.</strong></dd>
+                        </div>
+                        <div class="item">
+                            <span class="danger-tag">Destructive</span>
+                            <dt>Restore to Latest</dt>
+                            <dd>— Same as Restore to Point, but the target is always the most recent entry. Equivalent to picking the newest entry in the dropdown. Use after a disaster to get back to the freshest backed-up state.</dd>
+                        </div>
                     </dl>
+                    <div class="restore-note">
+                        <strong>How restores walk the chain.</strong>
+                        Each Full backup is a checkpoint. A restore to any point only replays
+                        <span class="mono">[most recent Full ≤ target] → ... → target</span> — earlier Fulls and their incrementals are irrelevant.
+                        Backup files on disk are never deleted by a restore; only the live database is rebuilt.
+                    </div>
 
-                    <details class="history">
+                    <details class="history"${openHistoryFor.has(db.type) ? ' open' : ''}>
                         <summary>Backup history (${db.count})</summary>
                         ${historyHtml}
                     </details>

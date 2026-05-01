@@ -4,13 +4,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { runBackup, getRunStats } = require('./backup');
-const { runRestore } = require('./restore');
+const { runRestore, getRestoreStats } = require('./restore');
 const { readManifest } = require('./manifest');
+const { readLockInfo } = require('./locking');
 const scheduler = require('./scheduler');
 const config = require('./config');
 const logger = require('./logger');
-
-const LOCKFILE_NAME = '.backup.lock';
 
 let server = null;
 
@@ -109,15 +108,6 @@ function getLatestBackups() {
     });
 }
 
-function readLockInfo() {
-    const lockPath = path.resolve(config.backupDir, LOCKFILE_NAME);
-    if (!fs.existsSync(lockPath)) return null;
-    try {
-        return JSON.parse(fs.readFileSync(lockPath, 'utf-8'));
-    } catch {
-        return null;
-    }
-}
 
 const requestHandler = async (req, res) => {
     const { method, url } = req;
@@ -140,12 +130,15 @@ const requestHandler = async (req, res) => {
         const status = {
             scheduler: scheduler.getStatus(),
             runs: getRunStats(),
+            lastRestore: getRestoreStats(),
             inFlight: readLockInfo(),
             backups: getLatestBackups(),
             config: {
                 dbData: config.dbData,
                 dbParse: config.dbParse,
-                backupDir: config.backupDir
+                backupDir: config.backupDir,
+                appendOnlyData: config.appendOnlyData,
+                appendOnlyParse: config.appendOnlyParse
             }
         };
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -192,10 +185,17 @@ const requestHandler = async (req, res) => {
                 const isFull = data.type === 'full';
                 const target = data.target || 'all';
                 const sinceId = data.sinceId || null;
-                logger.info({ isFull, target, sinceId }, 'Manual restore triggered via API');
-                
+                const backupId = data.backupId || null;
+                logger.info({ isFull, target, sinceId, backupId }, 'Manual restore triggered via API');
+
                 // Run in background
-                runRestore(target, null, isFull, sinceId, isFull).catch(err => logger.error({ err }, 'Manual restore failed'));
+                runRestore(target, backupId, isFull, sinceId, isFull, 'api')
+                    .then((result) => {
+                        if (result?.skipped) {
+                            logger.warn({ reason: result.reason, holder: result.holder }, 'Manual restore skipped (another operation in progress)');
+                        }
+                    })
+                    .catch(err => logger.error({ err }, 'Manual restore failed'));
                 
                 res.writeHead(202, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ message: 'Restore started' }));
