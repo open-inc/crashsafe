@@ -15,6 +15,45 @@ const logger = require('./logger');
 let server = null;
 
 // ---------------------------------------------------------------------------
+// Destructive-restore confirmation tokens
+// ---------------------------------------------------------------------------
+//
+// A destructive restore (`dropExisting: true`) requires a fresh server-issued
+// token, even at the API layer. This means a stray script that hits
+// `/api/trigger/restore` with `dropExisting: true` cannot wipe the live DB
+// in a single request — it must first fetch a token from
+// `/api/restore/confirm`, then send it back. Tokens are single-use, expire
+// after 60 seconds, and are bound to the target DB the operator confirmed.
+// The dashboard's typed-`do it` modal still applies on top — UI friction
+// AND server gate, complementary not redundant.
+
+const CONFIRM_TTL_MS = 60_000;
+const pendingConfirms = new Map(); // token -> { target, expiresAt }
+
+function issueRestoreConfirm(target) {
+    // Garbage-collect expired entries so the Map can't grow unbounded.
+    const now = Date.now();
+    for (const [k, v] of pendingConfirms) {
+        if (v.expiresAt < now) pendingConfirms.delete(k);
+    }
+    const token = crypto.randomBytes(16).toString('hex');
+    const expiresAt = now + CONFIRM_TTL_MS;
+    pendingConfirms.set(token, { target, expiresAt });
+    return { token, expiresAt: new Date(expiresAt).toISOString() };
+}
+
+function consumeRestoreConfirm(token, target) {
+    if (typeof token !== 'string' || token.length === 0) return false;
+    const entry = pendingConfirms.get(token);
+    // Always delete on use, success or fail — single-shot semantics.
+    pendingConfirms.delete(token);
+    if (!entry) return false;
+    if (entry.expiresAt < Date.now()) return false;
+    if (entry.target !== target) return false;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // HTTP Basic Auth (optional — both env vars must be set to enable)
 // ---------------------------------------------------------------------------
 
@@ -130,6 +169,7 @@ const requestHandler = async (req, res) => {
     if (method === 'GET' && url === '/api/status') {
         const status = {
             scheduler: scheduler.getStatus(),
+            verifyScheduler: scheduler.getVerifyStatus(),
             runs: getRunStats(),
             lastRestore: getRestoreStats(),
             lastVerify: getVerifyStats(),
@@ -177,7 +217,54 @@ const requestHandler = async (req, res) => {
         return;
     }
 
+    // API: Issue a destructive-restore confirmation token.
+    // Body: `{ target?: 'data' | 'parse' | 'all' }` (default 'all').
+    // Response: `{ token, expiresAt }`. The token is required when calling
+    // /api/trigger/restore with `dropExisting: true`. Tokens are single-use
+    // and expire 60 s after issue. This makes a one-shot curl wipe attack
+    // impossible: a caller must do two round-trips, and the second must
+    // arrive within the window.
+    if (method === 'POST' && url === '/api/restore/confirm') {
+        let body = '';
+        req.on('data', chunk => { body += chunk; });
+        req.on('end', () => {
+            try {
+                const data = JSON.parse(body || '{}');
+                const target = data.target || 'all';
+                if (!['data', 'parse', 'all'].includes(target)) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    return res.end(JSON.stringify({ error: 'invalid target' }));
+                }
+                const issued = issueRestoreConfirm(target);
+                logger.info({ target, expiresAt: issued.expiresAt }, 'Restore confirmation token issued');
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(issued));
+            } catch {
+                res.writeHead(400);
+                res.end(JSON.stringify({ error: 'Invalid request' }));
+            }
+        });
+        return;
+    }
+
     // API: Trigger Restore
+    //
+    // Body shape:
+    //   {
+    //     type:           'full' | 'incremental',
+    //     target?:        'data' | 'parse' | 'all'   // default 'all'
+    //     backupId?:      string                       // ISO id, null = latest
+    //     sinceId?:       string                       // since-restore start
+    //     dropExisting?:  boolean                      // explicit destruct flag
+    //     mode?:          'direct' | 'sidecar'         // default 'direct'
+    //     confirmToken?:  string                       // required for any destructive op
+    //     verifyChecksums?: boolean                    // deep pre-flight
+    //   }
+    //
+    // Destructive operations (`dropExisting: true` OR `mode: 'sidecar'`)
+    // require a valid confirmToken from /api/restore/confirm; earlier
+    // versions could be wiped with a single curl POST. Both UI typing and
+    // server tokens apply.
     if (method === 'POST' && url === '/api/trigger/restore') {
         let body = '';
         req.on('data', chunk => { body += chunk; });
@@ -188,10 +275,36 @@ const requestHandler = async (req, res) => {
                 const target = data.target || 'all';
                 const sinceId = data.sinceId || null;
                 const backupId = data.backupId || null;
-                logger.info({ isFull, target, sinceId, backupId }, 'Manual restore triggered via API');
+                const dropExisting = !!data.dropExisting;
+                const mode = data.mode === 'sidecar' ? 'sidecar' : 'direct';
+                const verifyChecksums = !!data.verifyChecksums;
+
+                if (data.mode && !['direct', 'sidecar'].includes(data.mode)) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    return res.end(JSON.stringify({ error: `invalid mode "${data.mode}" — expected "direct" or "sidecar"` }));
+                }
+
+                // Server-side gate: any destructive operation requires a
+                // fresh, matching token from /api/restore/confirm. Sidecar
+                // mode is destructive too — the swap replaces the live DB —
+                // so the token gate applies regardless of `dropExisting`.
+                const isDestructive = dropExisting || mode === 'sidecar';
+                if (isDestructive) {
+                    const ok = consumeRestoreConfirm(data.confirmToken, target);
+                    if (!ok) {
+                        logger.warn({ target, mode, hasToken: !!data.confirmToken }, 'Destructive restore rejected — invalid or missing confirm token');
+                        res.writeHead(403, { 'Content-Type': 'application/json' });
+                        return res.end(JSON.stringify({
+                            error: 'destructive restore requires a confirm token',
+                            hint: 'POST /api/restore/confirm with the same target first; tokens expire after 60 s and are single-use',
+                        }));
+                    }
+                }
+
+                logger.info({ isFull, target, sinceId, backupId, dropExisting, mode, verifyChecksums }, 'Manual restore triggered via API');
 
                 // Run in background
-                runRestore(target, backupId, isFull, sinceId, isFull, 'api')
+                runRestore(target, backupId, isFull, sinceId, dropExisting, 'api', { verifyChecksums, mode })
                     .then((result) => {
                         if (result?.skipped) {
                             logger.warn({ reason: result.reason, holder: result.holder }, 'Manual restore skipped (another operation in progress)');

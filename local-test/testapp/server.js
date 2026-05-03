@@ -271,6 +271,23 @@ async function csFetch(pathPart, opts = {}) {
 }
 
 /**
+ * Trigger a destructive restore (`dropExisting: true`) end-to-end including
+ * the server-side confirmation-token round-trip. Mirrors what the dashboard
+ * does — fetch a token, then send it with the trigger.
+ */
+async function triggerDestructiveRestoreApi(body) {
+    const target = body.target ?? 'all';
+    const c = await csFetch('/api/restore/confirm', {
+        method: 'POST',
+        body: JSON.stringify({ target }),
+    });
+    return csFetch('/api/trigger/restore', {
+        method: 'POST',
+        body: JSON.stringify({ ...body, confirmToken: c.token }),
+    });
+}
+
+/**
  * Hash a collection's contents in a stable order. Returns { count, hash }.
  *
  * Uses **canonical EJSON** (mongo's `EJSON.stringify` with `relaxed: false`),
@@ -509,6 +526,57 @@ async function runAutoTest() {
         repairBackup:    newStep('repair-backup',   'Restore the byte to leave the backup tree consistent'),
         verifyRepaired:  newStep('verify-repaired', 'Trigger /api/verify and confirm everything is clean again'),
 
+        // Phase P — Pre-flight chain validation (the destructive guardrail).
+        // Corrupts a real tracking file in the chain, then triggers a Restore
+        // to Latest. Pre-flight MUST abort the restore BEFORE the live DB is
+        // dropped — afterwards we re-fingerprint and confirm live data is
+        // untouched. If pre-flight ever broke, this would manifest as a
+        // wiped / corrupt live DB.
+        preflightFingerprint: newStep('preflight-fp',      'Fingerprint live DB before tampering (state pre-preflight-test)'),
+        preflightCorrupt:     newStep('preflight-corrupt', 'Corrupt a tracking file in the data DB chain'),
+        preflightAbort:       newStep('preflight-abort',   'Trigger Restore to Latest — must abort before drop, NOT succeed'),
+        preflightLiveIntact:  newStep('preflight-intact',  'Verify live DB unchanged after aborted restore'),
+        preflightRepair:      newStep('preflight-repair',  'Restore the tracking file to leave the chain valid'),
+
+        // Phase Q — Sidecar restore mode. Replays the chain into a shadow DB
+        // and only swaps on success. Verifies: (1) live data is correct after
+        // a successful sidecar restore, (2) operator data not in the backup
+        // (a "non_backed_up" collection in the data DB) survives because
+        // sidecar only swaps what the chain restored, (3) an orphan sidecar
+        // from a faked previous failure is auto-cleaned at start.
+        sidecarSeedExtra:    newStep('sidecar-seed-extra',  'Add an operator-managed collection that is NOT in any backup'),
+        sidecarOrphan:       newStep('sidecar-orphan',      'Plant an orphan sidecar DB from a faked previous failure'),
+        sidecarRestore:      newStep('sidecar-restore',     'Trigger Restore to Latest with mode=sidecar'),
+        sidecarVerifyData:   newStep('sidecar-verify-data', 'Verify backed-up collections are at the latest state'),
+        sidecarVerifyExtra:  newStep('sidecar-verify-extra','Verify the non-backed-up operator collection survived'),
+        sidecarVerifyClean:  newStep('sidecar-verify-clean','Verify orphan sidecar was auto-cleaned and no new sidecar leaked'),
+
+        // Phase R — API token-gate (security regression test). A direct POST
+        // to /api/trigger/restore with dropExisting:true MUST be rejected with
+        // 403 if no confirmToken accompanies it. Without this gate, a stray
+        // curl could wipe the live DB.
+        tokenGateRefused:    newStep('token-gate-refused', 'POST /api/trigger/restore without confirmToken — must return 403'),
+
+        // Phase S — Sidecar resilience under replay failure. Truncates a real
+        // dump file so mongorestore fails mid-replay. The live DB MUST stay
+        // byte-for-byte identical (the whole point of sidecar mode).
+        sidecarFailFp:       newStep('sidecar-fail-fp',      'Fingerprint live DB before injecting failure'),
+        sidecarFailCorrupt:  newStep('sidecar-fail-corrupt', 'Truncate a real dump file (passes pre-flight, fails mongorestore)'),
+        sidecarFailExpect:   newStep('sidecar-fail-expect',  'Trigger sidecar restore — must FAIL'),
+        sidecarFailIntact:   newStep('sidecar-fail-intact',  'Verify live DB byte-for-byte unchanged after the failed sidecar'),
+        sidecarFailNoOrphan: newStep('sidecar-fail-noorphan','Verify failed sidecar dropped its shadow DB (no orphan)'),
+        sidecarFailRepair:   newStep('sidecar-fail-repair',  'Restore the truncated dump so the chain is valid again'),
+
+        // Phase T — Pre-flight with verifyChecksums catches dump corruption
+        // BEFORE drop. Differential vs Phase P: P corrupts a tracking file
+        // (cheap pre-flight catches), T corrupts a dump file (only the deep
+        // pre-flight with --verifyChecksums catches before mongorestore runs).
+        preflightCsumFp:      newStep('preflight-csum-fp',      'Fingerprint live DB before checksum-corruption test'),
+        preflightCsumCorrupt: newStep('preflight-csum-corrupt', 'Flip 1 byte in a real dump file (SHA mismatch, file still exists)'),
+        preflightCsumAbort:   newStep('preflight-csum-abort',   'Trigger restore with verifyChecksums:true — pre-flight must abort'),
+        preflightCsumIntact:  newStep('preflight-csum-intact',  'Verify live DB unchanged'),
+        preflightCsumRepair:  newStep('preflight-csum-repair',  'Restore the byte to leave the chain valid'),
+
         // Phase J — Manifest audit
         audit:        newStep('audit',            'Audit: verify backup count and size tracking'),
     };
@@ -669,10 +737,7 @@ async function runAutoTest() {
         await runStep(steps.rl, async () => {
             const before = await csFetch('/api/status');
             restoreBaseline = before.lastRestore ?? null;
-            await csFetch('/api/trigger/restore', {
-                method: 'POST',
-                body: JSON.stringify({ type: 'full', target: 'all' }),
-            });
+            await triggerDestructiveRestoreApi({ type: 'full', target: 'all', dropExisting: true });
             const r = await waitForCompletion('restore', restoreBaseline);
             return { finishedAt: r.finishedAt, mode: r.mode };
         });
@@ -694,10 +759,7 @@ async function runAutoTest() {
         await runStep(steps.rp, async () => {
             const before = await csFetch('/api/status');
             restoreBaseline = before.lastRestore ?? null;
-            await csFetch('/api/trigger/restore', {
-                method: 'POST',
-                body: JSON.stringify({ type: 'full', target: 'all', backupId: fullBackupId }),
-            });
+            await triggerDestructiveRestoreApi({ type: 'full', target: 'all', backupId: fullBackupId, dropExisting: true });
             const r = await waitForCompletion('restore', restoreBaseline);
             return { finishedAt: r.finishedAt, target: fullBackupId };
         });
@@ -724,10 +786,7 @@ async function runAutoTest() {
         await runStep(steps.rl2, async () => {
             const before = await csFetch('/api/status');
             restoreBaseline = before.lastRestore ?? null;
-            await csFetch('/api/trigger/restore', {
-                method: 'POST',
-                body: JSON.stringify({ type: 'full', target: 'all' }),
-            });
+            await triggerDestructiveRestoreApi({ type: 'full', target: 'all', dropExisting: true });
             const r = await waitForCompletion('restore', restoreBaseline);
             return { mode: r.mode };
         });
@@ -778,10 +837,7 @@ async function runAutoTest() {
         await runStep(steps.pitrInc1, async () => {
             const before = await csFetch('/api/status');
             restoreBaseline = before.lastRestore ?? null;
-            await csFetch('/api/trigger/restore', {
-                method: 'POST',
-                body: JSON.stringify({ type: 'full', target: 'all', backupId: inc1Id }),
-            });
+            await triggerDestructiveRestoreApi({ type: 'full', target: 'all', backupId: inc1Id, dropExisting: true });
             const r = await waitForCompletion('restore', restoreBaseline);
             return { target: inc1Id };
         });
@@ -807,10 +863,7 @@ async function runAutoTest() {
         await runStep(steps.pitrInc2, async () => {
             const before = await csFetch('/api/status');
             restoreBaseline = before.lastRestore ?? null;
-            await csFetch('/api/trigger/restore', {
-                method: 'POST',
-                body: JSON.stringify({ type: 'full', target: 'all', backupId: inc2Id }),
-            });
+            await triggerDestructiveRestoreApi({ type: 'full', target: 'all', backupId: inc2Id, dropExisting: true });
             const r = await waitForCompletion('restore', restoreBaseline);
             return { target: inc2Id };
         });
@@ -863,10 +916,7 @@ async function runAutoTest() {
         await runStep(steps.pitrFull2, async () => {
             const before = await csFetch('/api/status');
             restoreBaseline = before.lastRestore ?? null;
-            await csFetch('/api/trigger/restore', {
-                method: 'POST',
-                body: JSON.stringify({ type: 'full', target: 'all', backupId: full2Id }),
-            });
+            await triggerDestructiveRestoreApi({ type: 'full', target: 'all', backupId: full2Id, dropExisting: true });
             const r = await waitForCompletion('restore', restoreBaseline);
             return { target: full2Id };
         });
@@ -944,10 +994,7 @@ async function runAutoTest() {
         await runStep(steps.pitrInc3, async () => {
             const before = await csFetch('/api/status');
             restoreBaseline = before.lastRestore ?? null;
-            await csFetch('/api/trigger/restore', {
-                method: 'POST',
-                body: JSON.stringify({ type: 'full', target: 'all', backupId: inc3Id }),
-            });
+            await triggerDestructiveRestoreApi({ type: 'full', target: 'all', backupId: inc3Id, dropExisting: true });
             const r = await waitForCompletion('restore', restoreBaseline);
             return { target: inc3Id };
         });
@@ -1037,10 +1084,7 @@ async function runAutoTest() {
         await runStep(steps.restoreDrop, async () => {
             const before = await csFetch('/api/status');
             restoreBaseline = before.lastRestore ?? null;
-            await csFetch('/api/trigger/restore', {
-                method: 'POST',
-                body: JSON.stringify({ type: 'full', target: 'all' }),
-            });
+            await triggerDestructiveRestoreApi({ type: 'full', target: 'all', dropExisting: true });
             const r = await waitForCompletion('restore', restoreBaseline);
             return { mode: r.mode };
         });
@@ -1114,10 +1158,7 @@ async function runAutoTest() {
         await runStep(steps.restoreParse, async () => {
             const before = await csFetch('/api/status');
             restoreBaseline = before.lastRestore ?? null;
-            await csFetch('/api/trigger/restore', {
-                method: 'POST',
-                body: JSON.stringify({ type: 'full', target: 'all' }),
-            });
+            await triggerDestructiveRestoreApi({ type: 'full', target: 'all', dropExisting: true });
             const r = await waitForCompletion('restore', restoreBaseline);
             return { mode: r.mode };
         });
@@ -1289,6 +1330,450 @@ async function runAutoTest() {
                 throw new Error('After repair, verify still reports corruption: ' + JSON.stringify(r.summary));
             }
             return { status: r.status, summary: r.summary };
+        });
+
+        // ---- Phase P: Pre-flight chain validation guardrail ----------------------------
+        // The acid test for the destructive-restore guardrail: corrupt a real
+        // tracking file in the chain, fire a Restore to Latest, and assert that
+        // the live DB is NOT wiped — pre-flight must abort BEFORE the drop.
+        let preflightFp = null;
+        let preflightTrackingPath = null;
+        let preflightOriginalContent = null;
+
+        await runStep(steps.preflightFingerprint, async () => {
+            preflightFp = await fingerprintAll();
+            const collCount = Object.keys(preflightFp[DATA_DB] || {}).length
+                            + Object.keys(preflightFp[PARSE_DB] || {}).length;
+            return { collections: collCount };
+        });
+
+        await runStep(steps.preflightCorrupt, async () => {
+            if (!BACKUP_DIR) throw new Error('CRASHSAFE_BACKUP_DIR not set');
+            const dataRoot = path.join(BACKUP_DIR, 'data');
+            const manifestPath = path.join(dataRoot, 'manifest.json');
+            const m = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+
+            // Pick the LATEST entry that has a tracking file. Restore-to-Latest
+            // walks the chain from the most recent Full forward — it does NOT
+            // see entries that pre-date that Full. Picking the first entry
+            // with a trackingFile (as we used to) would land on a tracking
+            // file from a previous test run, sitting before the current
+            // Full2-checkpoint, and pre-flight would never look at it.
+            let candidate = null;
+            for (let i = m.backups.length - 1; i >= 0; i--) {
+                if (m.backups[i].trackingFile) { candidate = m.backups[i]; break; }
+            }
+            if (!candidate) throw new Error('No tracking file found in data manifest — chain has nothing to corrupt');
+
+            preflightTrackingPath = path.join(dataRoot, candidate.trackingFile);
+            preflightOriginalContent = fs.readFileSync(preflightTrackingPath);
+            // Write garbage that won't parse as EJSON
+            fs.writeFileSync(preflightTrackingPath, '{ this is not valid EJSON, on purpose');
+            return {
+                corruptedEntry: candidate.id,
+                corruptedFile: candidate.trackingFile,
+            };
+        });
+
+        await runStep(steps.preflightAbort, async () => {
+            const before = await csFetch('/api/status');
+            const baseline = before.lastRestore ?? null;
+            await triggerDestructiveRestoreApi({ type: 'full', target: 'all', dropExisting: true });
+
+            // Restore is expected to FAIL here. waitForCompletion throws on
+            // non-success — that's exactly what we want, just catch it.
+            let caughtErr = null;
+            try {
+                await waitForCompletion('restore', baseline);
+            } catch (err) {
+                caughtErr = err;
+            }
+            if (!caughtErr) {
+                throw new Error(
+                    'Pre-flight should have aborted the restore, but it ran to completion. ' +
+                    'This is a CRITICAL guardrail failure — destructive restore proceeded with a corrupt chain.'
+                );
+            }
+            // Sanity: the failure should specifically mention pre-flight, not
+            // some unrelated error. If the message looks wrong, surface it.
+            if (!/pre-flight|preflight|tracking|corrupt/i.test(caughtErr.message)) {
+                throw new Error(
+                    'Restore failed, but the error does not look like a pre-flight rejection. ' +
+                    'Message: ' + caughtErr.message
+                );
+            }
+            return {
+                abortedAsExpected: true,
+                firstLine: caughtErr.message.split('\n')[0],
+            };
+        });
+
+        await runStep(steps.preflightLiveIntact, async () => {
+            // The live DB MUST be byte-for-byte identical to before the aborted
+            // restore — no drops, no replays. If this step fails, the
+            // guardrail has been breached.
+            const after = await fingerprintAll();
+            const issues = compareFingerprints(after, preflightFp, ignoreColls);
+            if (issues.length) {
+                throw new Error(
+                    'Pre-flight DID NOT protect the live DB — fingerprint changed after aborted restore. ' +
+                    'Differences: ' + issues.slice(0, 3).join(' | ')
+                );
+            }
+            return { liveDbUntouched: true };
+        });
+
+        await runStep(steps.preflightRepair, async () => {
+            if (!preflightTrackingPath || !preflightOriginalContent) {
+                throw new Error('Nothing to repair (preflightCorrupt did not run)');
+            }
+            fs.writeFileSync(preflightTrackingPath, preflightOriginalContent);
+            return { repaired: path.basename(preflightTrackingPath) };
+        });
+
+        // ---- Phase Q: Sidecar restore mode --------------------------------------------
+        // Sidecar replays into a shadow DB and only swaps on success. Three
+        // properties to verify:
+        //   1. Backed-up collections end up at the latest backed-up state.
+        //   2. Operator data NOT in the backup (a non-prefixed collection in
+        //      the data DB) survives — direct mode would have wiped it, sidecar
+        //      preserves it because the swap only touches collections from
+        //      the chain.
+        //   3. An orphan sidecar from a previous failed run is auto-cleaned
+        //      at start, and no new orphan is left after a successful run.
+        const SIDECAR_PREFIX = '__crashsafe_restore_';
+        const NON_BACKED_UP_COLL = 'operator_data_not_in_backup';
+        // Captured before sidecar runs so we can assert the post-restore state
+        // matches exactly. The operator collection we seed below is excluded
+        // from the comparison via ignoreColls.
+        let preSidecarFp = null;
+
+        await runStep(steps.sidecarSeedExtra, async () => {
+            // We're at "post-preflight-repair" state — same as state E with the
+            // earlier modifications applied. Add an extra collection that
+            // doesn't match the sensor-prefix or the config-coll name, so
+            // crashsafe never backs it up. Sidecar mode must preserve it.
+            const c = client.db(DATA_DB).collection(NON_BACKED_UP_COLL);
+            await c.insertMany([
+                { _id: 1, marker: 'survives-sidecar-restore' },
+                { _id: 2, marker: 'survives-sidecar-restore' },
+                { _id: 3, marker: 'survives-sidecar-restore' },
+            ]);
+            // Fingerprint after seeding so we can compare post-sidecar.
+            // The non-backed-up coll is included on both sides; sidecar must
+            // preserve it, so it appearing identical is the right assertion.
+            preSidecarFp = await fingerprintAll();
+            return { collection: NON_BACKED_UP_COLL, docs: 3, fingerprintCollections:
+                Object.keys(preSidecarFp[DATA_DB] || {}).length + Object.keys(preSidecarFp[PARSE_DB] || {}).length };
+        });
+
+        await runStep(steps.sidecarOrphan, async () => {
+            // Plant a fake-orphan sidecar with a marker doc. crashsafe should
+            // detect it (`<DATA_DB>__crashsafe_restore_*` prefix) and drop it
+            // before starting the new sidecar.
+            const orphanName = `${DATA_DB}${SIDECAR_PREFIX}faked-failed-run-${Date.now()}`;
+            await client.db(orphanName).collection('_orphan_marker').insertOne({ planted: new Date() });
+            return { planted: orphanName };
+        });
+
+        await runStep(steps.sidecarRestore, async () => {
+            const before = await csFetch('/api/status');
+            const baseline = before.lastRestore ?? null;
+            await triggerDestructiveRestoreApi({
+                type: 'full',
+                target: 'data',
+                dropExisting: true,
+                mode: 'sidecar',
+            });
+            const r = await waitForCompletion('restore', baseline);
+            if (r.status !== 'success') {
+                throw new Error('Sidecar restore failed: status=' + r.status + ' error=' + (r.error || '-'));
+            }
+            return { mode: r.restoreMode ?? r.mode };
+        });
+
+        await runStep(steps.sidecarVerifyData, async () => {
+            // The post-sidecar fingerprint must equal the pre-sidecar one
+            // exactly: the chain replay produces the same end-state the live
+            // DB was already at (same chain, no intermediate writes), and
+            // the operator-managed collection is preserved by the sidecar
+            // semantic. Excluding `not_a_sensor` because that's never backed
+            // up and the harness ignores it elsewhere too.
+            const after = await fingerprintAll();
+            const issues = compareFingerprints(after, preSidecarFp, ignoreColls);
+            if (issues.length) {
+                throw new Error(
+                    'Sidecar restore did not produce the expected state. ' +
+                    'Differences from pre-sidecar fingerprint: ' + issues.slice(0, 3).join(' | ')
+                );
+            }
+            // Sanity sub-check kept for diagnostics — total counts as an at-a-glance number.
+            const sensorColls = Object.keys(after[DATA_DB] || {}).filter(n => n.startsWith(COLLECTION_PREFIX));
+            const totalSensorDocs = sensorColls.reduce((s, n) => s + after[DATA_DB][n].count, 0);
+            return { match: true, sensorCollections: sensorColls.length, totalSensorDocs };
+        });
+
+        await runStep(steps.sidecarVerifyExtra, async () => {
+            // The crucial sidecar-mode property: the operator data we seeded
+            // (which is NOT in any backup) MUST still be there. Direct mode
+            // would have wiped the entire DB and lost it.
+            const c = client.db(DATA_DB).collection(NON_BACKED_UP_COLL);
+            const docs = await c.find({}).toArray();
+            if (docs.length !== 3) {
+                throw new Error(
+                    'Sidecar mode WIPED non-backed-up collection — that is the bug sidecar is supposed to prevent. ' +
+                    'Got ' + docs.length + ' docs, expected 3.'
+                );
+            }
+            return { preserved: NON_BACKED_UP_COLL, docs: docs.length };
+        });
+
+        await runStep(steps.sidecarVerifyClean, async () => {
+            // No sidecar DB should be left behind: the orphan from before
+            // should have been auto-cleaned, and the just-completed restore's
+            // own sidecar should be dropped after a successful swap.
+            const dbs = await client.db('admin').admin().listDatabases();
+            const stragglers = dbs.databases
+                .map(d => d.name)
+                .filter(n => n.startsWith(`${DATA_DB}${SIDECAR_PREFIX}`));
+            if (stragglers.length > 0) {
+                throw new Error(
+                    'Sidecar leak — found ' + stragglers.length + ' leftover sidecar DB(s) after a clean run: ' +
+                    stragglers.join(', ')
+                );
+            }
+            return { stragglers: 0 };
+        });
+
+        // ---- Phase R: API token-gate (security regression test) -----------------------
+        // A direct POST to /api/trigger/restore with dropExisting:true MUST
+        // return 403 unless paired with a fresh /api/restore/confirm token.
+        // Without this regression test, the gate could be silently removed in
+        // a refactor and `curl --data '{type:"full",dropExisting:true}'` would
+        // wipe production.
+        await runStep(steps.tokenGateRefused, async () => {
+            const url = CRASHSAFE_URL + '/api/trigger/restore';
+            const headers = { 'Content-Type': 'application/json' };
+            if (CRASHSAFE_AUTH_USER && CRASHSAFE_AUTH_PASS) {
+                headers.Authorization = 'Basic ' + Buffer.from(CRASHSAFE_AUTH_USER + ':' + CRASHSAFE_AUTH_PASS).toString('base64');
+            }
+            const res = await fetch(url, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({ type: 'full', target: 'data', dropExisting: true }),
+            });
+            if (res.status !== 403) {
+                throw new Error(
+                    'CRITICAL: token gate broken — POST without confirmToken returned ' + res.status +
+                    ' (expected 403). The destructive-restore guard would not stop a stray curl.'
+                );
+            }
+            const body = await res.json().catch(() => ({}));
+            if (!/confirm/i.test(body.error || '')) {
+                throw new Error('Got 403 but error message does not mention confirm: ' + JSON.stringify(body));
+            }
+            return { rejectedAs: 403, errorMessage: body.error };
+        });
+
+        // ---- Phase S: Sidecar resilience under replay failure -------------------------
+        // The whole point of sidecar mode is "if replay fails, the live DB is
+        // byte-for-byte unchanged." This phase proves it: truncate a real
+        // dump file (passes existence-pre-flight, fails mongorestore), trigger
+        // a sidecar restore, and assert the live DB is identical afterwards.
+        let sidecarFailFp = null;
+        let sidecarFailFile = null;
+        let sidecarFailOriginal = null;
+
+        await runStep(steps.sidecarFailFp, async () => {
+            sidecarFailFp = await fingerprintAll();
+            return { collections:
+                Object.keys(sidecarFailFp[DATA_DB] || {}).length +
+                Object.keys(sidecarFailFp[PARSE_DB] || {}).length };
+        });
+
+        await runStep(steps.sidecarFailCorrupt, async () => {
+            if (!BACKUP_DIR) throw new Error('CRASHSAFE_BACKUP_DIR not set');
+            const dataRoot = path.join(BACKUP_DIR, 'data');
+            const slugs = fs.readdirSync(dataRoot, { withFileTypes: true })
+                .filter(e => e.isDirectory() && e.name !== 'ids')
+                .map(e => e.name)
+                .sort()
+                .reverse();
+            function findBson(dir) {
+                for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+                    const p = path.join(dir, e.name);
+                    if (e.isDirectory()) {
+                        const r = findBson(p);
+                        if (r) return r;
+                    } else if (e.isFile() && e.name.endsWith('.bson.gz')) {
+                        return p;
+                    }
+                }
+                return null;
+            }
+            let target = null;
+            for (const s of slugs) {
+                target = findBson(path.join(dataRoot, s));
+                if (target) break;
+            }
+            if (!target) throw new Error('No .bson.gz in chain to truncate');
+            sidecarFailFile = target;
+            sidecarFailOriginal = fs.readFileSync(target);
+            // Truncate to 0 bytes — existence check passes, mongorestore fails
+            // hard reading an empty gzip file.
+            fs.writeFileSync(target, '');
+            return { truncated: path.relative(BACKUP_DIR, target), originalBytes: sidecarFailOriginal.length };
+        });
+
+        await runStep(steps.sidecarFailExpect, async () => {
+            const before = await csFetch('/api/status');
+            const baseline = before.lastRestore ?? null;
+            await triggerDestructiveRestoreApi({
+                type: 'full',
+                target: 'data',
+                dropExisting: true,
+                mode: 'sidecar',
+            });
+            let caughtErr = null;
+            try { await waitForCompletion('restore', baseline); }
+            catch (err) { caughtErr = err; }
+            if (!caughtErr) {
+                throw new Error('Sidecar restore should have FAILED (truncated dump in chain) but completed successfully');
+            }
+            return { failedAsExpected: true, firstLine: caughtErr.message.split('\n')[0].slice(0, 200) };
+        });
+
+        await runStep(steps.sidecarFailIntact, async () => {
+            const after = await fingerprintAll();
+            const issues = compareFingerprints(after, sidecarFailFp, ignoreColls);
+            if (issues.length) {
+                throw new Error(
+                    'CRITICAL: sidecar replay failure was NOT contained — live DB diverged after a failed sidecar restore. ' +
+                    'This is the core safety promise of sidecar mode. Differences: ' + issues.slice(0, 3).join(' | ')
+                );
+            }
+            return { liveDbUntouched: true };
+        });
+
+        await runStep(steps.sidecarFailNoOrphan, async () => {
+            // The failed sidecar must auto-clean its shadow DB on failure —
+            // otherwise the disk slowly fills with corpses of failed restores.
+            const dbs = await client.db('admin').admin().listDatabases();
+            const stragglers = dbs.databases
+                .map(d => d.name)
+                .filter(n => n.startsWith(`${DATA_DB}${SIDECAR_PREFIX}`));
+            if (stragglers.length > 0) {
+                throw new Error(
+                    'Failed sidecar left orphan DB(s); on-failure cleanup did not run: ' + stragglers.join(', ')
+                );
+            }
+            return { stragglers: 0 };
+        });
+
+        await runStep(steps.sidecarFailRepair, async () => {
+            if (!sidecarFailFile || !sidecarFailOriginal) throw new Error('Nothing to repair');
+            fs.writeFileSync(sidecarFailFile, sidecarFailOriginal);
+            return { repaired: path.basename(sidecarFailFile), restoredBytes: sidecarFailOriginal.length };
+        });
+
+        // ---- Phase T: Pre-flight with verifyChecksums catches dump corruption ----------
+        // Differential vs Phase P: P corrupts a tracking file → cheap pre-flight
+        // (existence + parseability) catches. T corrupts a dump file's bytes
+        // (existence still passes, parseability not relevant for binary dumps)
+        // — only the deep pre-flight that re-hashes against stored SHA-256s
+        // catches it BEFORE the destructive drop.
+        let preflightCsumFp = null;
+        let preflightCsumFile = null;
+        let preflightCsumOffset = null;
+        let preflightCsumOriginal = null;
+
+        await runStep(steps.preflightCsumFp, async () => {
+            preflightCsumFp = await fingerprintAll();
+            return { collections:
+                Object.keys(preflightCsumFp[DATA_DB] || {}).length +
+                Object.keys(preflightCsumFp[PARSE_DB] || {}).length };
+        });
+
+        await runStep(steps.preflightCsumCorrupt, async () => {
+            if (!BACKUP_DIR) throw new Error('CRASHSAFE_BACKUP_DIR not set');
+            const dataRoot = path.join(BACKUP_DIR, 'data');
+            const slugs = fs.readdirSync(dataRoot, { withFileTypes: true })
+                .filter(e => e.isDirectory() && e.name !== 'ids')
+                .map(e => e.name)
+                .sort()
+                .reverse();
+            function findBson(dir) {
+                for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+                    const p = path.join(dir, e.name);
+                    if (e.isDirectory()) { const r = findBson(p); if (r) return r; }
+                    else if (e.isFile() && e.name.endsWith('.bson.gz')) return p;
+                }
+                return null;
+            }
+            let target = null;
+            for (const s of slugs) {
+                target = findBson(path.join(dataRoot, s));
+                if (target) break;
+            }
+            if (!target) throw new Error('No .bson.gz in chain to corrupt');
+            preflightCsumFile = target;
+            const buf = fs.readFileSync(target);
+            if (buf.length < 4) throw new Error('Dump file too small to byte-flip safely: ' + target);
+            // Flip the last byte — keeps the file size unchanged, but SHA-256
+            // shifts. Existence + parseability checks won't notice; only the
+            // deep pre-flight (verifyChecksums:true) catches it.
+            preflightCsumOffset = buf.length - 1;
+            preflightCsumOriginal = buf[preflightCsumOffset];
+            buf[preflightCsumOffset] ^= 0xff;
+            fs.writeFileSync(target, buf);
+            return { corrupted: path.relative(BACKUP_DIR, target), offset: preflightCsumOffset };
+        });
+
+        await runStep(steps.preflightCsumAbort, async () => {
+            const before = await csFetch('/api/status');
+            const baseline = before.lastRestore ?? null;
+            await triggerDestructiveRestoreApi({
+                type: 'full',
+                target: 'data',
+                dropExisting: true,
+                verifyChecksums: true,  // <-- the differential
+            });
+            let caughtErr = null;
+            try { await waitForCompletion('restore', baseline); }
+            catch (err) { caughtErr = err; }
+            if (!caughtErr) {
+                throw new Error(
+                    'Restore should have aborted at deep pre-flight (SHA mismatch on dump file). ' +
+                    'verifyChecksums:true did not catch the corrupt file before the drop.'
+                );
+            }
+            // The pre-flight error message lists hash issues — verify it does.
+            if (!/hash|preflight|pre-flight|chain/i.test(caughtErr.message)) {
+                throw new Error('Restore failed but not for pre-flight checksum reasons: ' + caughtErr.message);
+            }
+            return { abortedAsExpected: true, firstLine: caughtErr.message.split('\n')[0].slice(0, 200) };
+        });
+
+        await runStep(steps.preflightCsumIntact, async () => {
+            const after = await fingerprintAll();
+            const issues = compareFingerprints(after, preflightCsumFp, ignoreColls);
+            if (issues.length) {
+                throw new Error(
+                    'Pre-flight (with verifyChecksums) failed to protect live DB. ' +
+                    'Differences: ' + issues.slice(0, 3).join(' | ')
+                );
+            }
+            return { liveDbUntouched: true };
+        });
+
+        await runStep(steps.preflightCsumRepair, async () => {
+            if (!preflightCsumFile || preflightCsumOffset === null || preflightCsumOriginal === null) {
+                throw new Error('Nothing to repair');
+            }
+            const buf = fs.readFileSync(preflightCsumFile);
+            buf[preflightCsumOffset] = preflightCsumOriginal;
+            fs.writeFileSync(preflightCsumFile, buf);
+            return { repaired: path.basename(preflightCsumFile) };
         });
 
         // ---- Phase J: Manifest audit ----------------------------------------------------

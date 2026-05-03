@@ -462,6 +462,16 @@
         margin-bottom: 10px;
       }
 
+      .typed-confirm-phrase {
+        font-family: "IBM Plex Mono", monospace;
+        background: rgba(212, 91, 68, 0.1);
+        color: #b04a36;
+        padding: 1px 8px;
+        border-radius: 6px;
+        font-weight: 700;
+        font-size: 0.95em;
+      }
+
       .custom-table .ant-table {
         background: transparent;
       }
@@ -545,6 +555,7 @@
         Col,
         ConfigProvider,
         Divider,
+        Input,
         Layout,
         List,
         Modal,
@@ -864,12 +875,32 @@
         return { title, type, lines, progress };
       }
 
+      const TYPED_CONFIRM_PHRASE = "do it";
+
       function Dashboard() {
         const [statusData, setStatusData] = useState(null);
         const [restoreModalOpen, setRestoreModalOpen] = useState(false);
         const [restoreTarget, setRestoreTarget] = useState(null);
         const [restoreBackupId, setRestoreBackupId] = useState(null);
         const [openHistoryFor, setOpenHistoryFor] = useState({});
+        // Destructive operations gate behind a typed-phrase modal — user must
+        // type TYPED_CONFIRM_PHRASE before the OK button enables. Single state
+        // covers all destructive paths (Restore-to-Latest, Restore-to-Point,
+        // future ones); set the object to open it, set null to close.
+        const [typedConfirm, setTypedConfirm] = useState(null);
+        const [typedConfirmValue, setTypedConfirmValue] = useState("");
+        // Restore strategy chosen in the typed-confirm modal. 'direct' wipes
+        // and replays in place (fast, no extra disk). 'sidecar' replays into
+        // a shadow DB and only swaps on success (slower, 2× disk, safer).
+        // The ref companion is used so the onConfirm closure (set at modal-
+        // open time) always reads the latest selection at OK-click time —
+        // without it, switching mode inside the modal wouldn't propagate.
+        const [restoreMode, setRestoreMode] = useState("direct");
+        const restoreModeRef = useRef("direct");
+        const setRestoreModeBoth = (v) => {
+          restoreModeRef.current = v;
+          setRestoreMode(v);
+        };
         const completionRef = useRef({
           firstSeen: false,
           scheduled: null,
@@ -964,20 +995,75 @@
           }
         };
 
+        // Open the typed-phrase confirmation modal for a destructive action.
+        // `onConfirm` only runs once the user has typed TYPED_CONFIRM_PHRASE
+        // and pressed OK. Cancel clears state without running anything.
+        // restoreMode is reset to the safe default ('direct') so each open
+        // starts from a known state — the user must actively pick 'sidecar'
+        // every time they want it.
+        const requireTypedConfirm = (opts) => {
+          setTypedConfirmValue("");
+          setRestoreModeBoth("direct");
+          setTypedConfirm(opts);
+        };
+
+        const closeTypedConfirm = () => {
+          setTypedConfirm(null);
+          setTypedConfirmValue("");
+        };
+
+        const typedConfirmMatches =
+          typedConfirmValue.trim().toLowerCase() === TYPED_CONFIRM_PHRASE;
+
+        // Fetch a single-use confirm token, then trigger the destructive
+        // restore with it. Server rejects destructive restore without it
+        // (or with an expired/wrong-target one). Token TTL is 60 s, so this
+        // round-trip must be quick — no manual confirmation pause between
+        // them. The typed-`do it` modal sits above this call; once the user
+        // confirms, both the fetch and the trigger fire back-to-back.
+        const triggerDestructiveRestore = async (body, successText) => {
+          try {
+            const cRes = await fetch("/api/restore/confirm", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ target: body.target ?? "all" }),
+            });
+            if (!cRes.ok) {
+              const ce = await cRes.json().catch(() => ({}));
+              return antd.message.error(
+                "Could not obtain restore confirm token: " +
+                  (ce.error || cRes.status),
+              );
+            }
+            const { token } = await cRes.json();
+            await triggerAction(
+              "/api/trigger/restore",
+              { ...body, confirmToken: token },
+              successText,
+            );
+          } catch {
+            antd.message.error("Network error while obtaining confirm token");
+          }
+        };
+
         const confirmLatestRestore = (target) => {
-          Modal.confirm({
-            title: "Restore to Latest",
-            content:
+          requireTypedConfirm({
+            title: "Restore to Latest — destructive",
+            message:
               'This drops every collection in "' +
               target +
               '" and replays the chain up to the newest backup. Current live data in that database will be lost.',
             okText: "Start Restore",
-            okButtonProps: { danger: true },
-            cancelText: "Cancel",
-            onOk: () =>
-              triggerAction(
-                "/api/trigger/restore",
-                { type: "full", target },
+            // The ref is read at click-time so the user's mode selection
+            // (which they may flip inside the modal) is honoured.
+            onConfirm: () =>
+              triggerDestructiveRestore(
+                {
+                  type: "full",
+                  target,
+                  dropExisting: true,
+                  mode: restoreModeRef.current,
+                },
                 "Restore triggered",
               ),
           });
@@ -996,29 +1082,30 @@
         const confirmRestorePoint = () => {
           if (!restoreTarget || !restoreBackupId) return;
           const when = new Date(restoreBackupId).toLocaleString();
-          Modal.confirm({
-            title: "Restore to Point in Time",
-            content:
+          // Close the picker first so the typed-confirm modal isn't stacked
+          // on top of it — Ant's modals stack but it's visually noisy.
+          setRestoreModalOpen(false);
+          requireTypedConfirm({
+            title: "Restore to Point in Time — destructive",
+            message:
               'This drops every collection in "' +
               restoreTarget +
               '" and restores the exact state captured at ' +
               when +
               ". Data written after that point will be lost.",
             okText: "Start Restore",
-            okButtonProps: { danger: true },
-            cancelText: "Cancel",
-            onOk: async () => {
-              setRestoreModalOpen(false);
-              await triggerAction(
-                "/api/trigger/restore",
+            onConfirm: () =>
+              triggerDestructiveRestore(
                 {
                   type: "full",
                   target: restoreTarget,
                   backupId: restoreBackupId,
+                  // Wipe-and-restore must be explicit, not inferred from type.
+                  dropExisting: true,
+                  mode: restoreModeRef.current,
                 },
                 "Point-in-time restore triggered",
-              );
-            },
+              ),
           });
         };
 
@@ -1586,6 +1673,122 @@
               onChange: setRestoreBackupId,
               placeholder: "Choose a backup entry",
             }),
+          ),
+          // Typed-phrase confirmation gate for any destructive action. The OK
+          // button only enables once the user has typed TYPED_CONFIRM_PHRASE,
+          // so a stray click can't trigger a wipe.
+          React.createElement(
+            Modal,
+            {
+              title: typedConfirm?.title || "Confirm destructive action",
+              open: !!typedConfirm,
+              okText: typedConfirm?.okText || "Confirm",
+              cancelText: "Cancel",
+              okButtonProps: {
+                danger: true,
+                disabled: !typedConfirmMatches,
+              },
+              onOk: () => {
+                if (!typedConfirmMatches) return;
+                const fn = typedConfirm?.onConfirm;
+                closeTypedConfirm();
+                if (fn) fn();
+              },
+              onCancel: closeTypedConfirm,
+              destroyOnClose: true,
+              maskClosable: false,
+            },
+            React.createElement(
+              Paragraph,
+              { style: { color: "#5e7381", lineHeight: 1.7, marginBottom: 18 } },
+              typedConfirm?.message || "",
+            ),
+            React.createElement(
+              Paragraph,
+              {
+                style: {
+                  color: "#5e7381",
+                  lineHeight: 1.6,
+                  marginBottom: 12,
+                  fontSize: 13,
+                },
+              },
+              "To proceed, type ",
+              React.createElement(
+                "span",
+                { className: "typed-confirm-phrase" },
+                TYPED_CONFIRM_PHRASE,
+              ),
+              " below and press the Start button.",
+            ),
+            React.createElement(Input, {
+              value: typedConfirmValue,
+              onChange: (e) => setTypedConfirmValue(e.target.value),
+              placeholder: 'Type "' + TYPED_CONFIRM_PHRASE + '" to confirm',
+              autoFocus: true,
+              // Pressing Enter triggers the action when the phrase matches —
+              // saves a click but still requires the deliberate typed phrase.
+              onPressEnter: () => {
+                if (!typedConfirmMatches) return;
+                const fn = typedConfirm?.onConfirm;
+                closeTypedConfirm();
+                if (fn) fn();
+              },
+            }),
+            // Restore-strategy picker. Only shown for typed-confirm dialogs
+            // that come from a restore action (others can ignore it). Sidecar
+            // is the safer-but-slower option; direct is the historical
+            // behaviour. Default is direct, reset on every modal-open.
+            React.createElement(
+              "div",
+              { style: { marginTop: 18 } },
+              React.createElement(
+                "label",
+                {
+                  style: {
+                    display: "block",
+                    fontSize: 11,
+                    fontWeight: 800,
+                    textTransform: "uppercase",
+                    letterSpacing: "0.14em",
+                    color: "#7a8b95",
+                    marginBottom: 8,
+                  },
+                },
+                "Restore strategy",
+              ),
+              React.createElement(Select, {
+                value: restoreMode,
+                style: { width: "100%" },
+                onChange: setRestoreModeBoth,
+                options: [
+                  {
+                    value: "direct",
+                    label:
+                      "Direct (default) — drop & replay in place. Fast, mid-replay failure leaves a half-restored DB.",
+                  },
+                  {
+                    value: "sidecar",
+                    label:
+                      "Sidecar — replay into shadow DB, swap on success. 2× disk + slower, but live DB is byte-for-byte safe if replay fails.",
+                  },
+                ],
+              }),
+              React.createElement(
+                "div",
+                {
+                  style: {
+                    marginTop: 8,
+                    fontSize: 12,
+                    color: "#7a8b95",
+                    lineHeight: 1.5,
+                  },
+                },
+                restoreMode === "sidecar"
+                  ? "Sidecar mode preserves any non-backed-up live collections. Failure during replay leaves the live DB untouched. Requires roughly 2× the dump size of free disk in the destination cluster."
+                  : "Direct mode replaces the live DB outright. If the replay aborts midway, recovery is a re-run of the same restore (the backup tree on disk is unaffected by the failure).",
+              ),
+            ),
           ),
         );
       }

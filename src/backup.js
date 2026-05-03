@@ -8,6 +8,7 @@ const { getDb, disconnect } = require('./db');
 const { appendBackupEntry, readManifest, writeManifest, computeBackupSize } = require('./manifest');
 const { computeBackupChecksums } = require('./checksum');
 const { tryAcquireLock, releaseLock, updateLockProgress } = require('./locking');
+const { redactErr, redactUri } = require('./uri-redact');
 const config = require('./config');
 const logger = require('./logger');
 
@@ -114,7 +115,9 @@ function runMongoDump(uri, dbName, collName, query, outDir) {
 
         execFile('mongodump', args, { maxBuffer: 1024 * 1024 * 10 }, (error, stdout, stderr) => {
             if (error) {
-                logger.error({ error, stderr }, 'mongodump failed');
+                // execFile's error object carries `cmd` (full argv including
+                // --uri=mongodb://user:password@host) — must scrub before logging.
+                logger.error({ error: redactErr(error), stderr: redactUri(stderr) }, 'mongodump failed');
                 reject(error);
             } else {
                 resolve();
@@ -127,7 +130,7 @@ function runMongoDump(uri, dbName, collName, query, outDir) {
 // Core backup for a single database
 // ---------------------------------------------------------------------------
 
-async function backupDb(dbName, dbType, forceFull, id, trigger, appendOnly) {
+async function backupDb(dbName, dbType, forceFull, id, trigger, appendOnly, dryRun = false) {
     const dir = dbBackupDir(dbType);
     fs.mkdirSync(dir, { recursive: true });
 
@@ -136,6 +139,15 @@ async function backupDb(dbName, dbType, forceFull, id, trigger, appendOnly) {
     const isFull = forceFull || !lastEntry;
 
     const lastRunDate = lastEntry ? idToDate(lastEntry.id) : null;
+    // thisRunStartDate caps the changed-doc query so writes that happen DURING
+    // this backup run aren't half-captured (collection A dumped early misses
+    // them, collection B dumped late includes them — that produced
+    // cross-collection inconsistency at restore-to-this-id). Doc.updatedAt
+    // strictly less-than-or-equal to id ensures every collection sees the
+    // exact same time window. Writes beyond this window flow into the next
+    // inc, whose lower bound is `$gt: this.id`, so nothing is lost or
+    // double-counted across the chain.
+    const thisRunStartDate = idToDate(id);
     const prevSlug = lastEntry?.idDir ?? null;
 
     const db = await getDb(dbName);
@@ -151,10 +163,14 @@ async function backupDb(dbName, dbType, forceFull, id, trigger, appendOnly) {
     const slug = id.replace(/[:.]/g, '-');
     const dumpOutDir = path.join(dir, slug);
     const idsBaseDir = snapshotDir(dir, slug);
-    fs.mkdirSync(idsBaseDir, { recursive: true });
+    if (!dryRun) fs.mkdirSync(idsBaseDir, { recursive: true });
 
     const trackingData = [];
     const touchedCollections = [];
+    // dry-run plan: collected per-collection so the caller can render or log
+    // exactly what a real run would have done. Always populated; only
+    // returned when dryRun is true.
+    const plan = { id, dbType, type: isFull ? 'full' : 'incremental', collections: [] };
 
     let processedCount = 0;
     for (const collName of collectionNames) {
@@ -175,7 +191,7 @@ async function backupDb(dbName, dbType, forceFull, id, trigger, appendOnly) {
 
         const changedQuery = (isFull || isConfigColl || !lastRunDate)
             ? null
-            : { [config.updatedAtField]: { $gt: lastRunDate } };
+            : { [config.updatedAtField]: { $gt: lastRunDate, $lte: thisRunStartDate } };
 
         let docCount = 0;
         const deletedIds = [];
@@ -187,7 +203,7 @@ async function backupDb(dbName, dbType, forceFull, id, trigger, appendOnly) {
             // whether this collection used to exist — append-only opts out of
             // per-document delete tracking, but collection-level drops are
             // always tracked (the comparison is just a readdir, no work per doc).
-            fs.closeSync(fs.openSync(snapshotFile(dir, slug, collName), 'w'));
+            if (!dryRun) fs.closeSync(fs.openSync(snapshotFile(dir, slug, collName), 'w'));
             if (isFull) {
                 docCount = await coll.estimatedDocumentCount();
             } else if (changedQuery) {
@@ -205,7 +221,12 @@ async function backupDb(dbName, dbType, forceFull, id, trigger, appendOnly) {
             const needsDeleteDetection = !isFull;
             const currentIdSet = needsDeleteDetection ? new Set() : null;
 
-            const idStream = fs.createWriteStream(snapshotFile(dir, slug, collName), { encoding: 'utf-8' });
+            // In dry-run we still iterate the cursor (so delete detection
+            // works against the prev run's JSONL on disk), but the write
+            // target is a no-op stream — nothing lands on disk.
+            const idStream = dryRun
+                ? { write: () => true, end: (cb) => cb && cb(), once: () => {} }
+                : fs.createWriteStream(snapshotFile(dir, slug, collName), { encoding: 'utf-8' });
             const idCursor = coll.find({}, { projection: { _id: 1 } }).batchSize(CURSOR_BATCH_SIZE);
             try {
                 for await (const doc of idCursor) {
@@ -258,7 +279,7 @@ async function backupDb(dbName, dbType, forceFull, id, trigger, appendOnly) {
             touchedCollections.push(collName);
         }
 
-        if (hasChanges) {
+        if (hasChanges && !dryRun) {
             await runMongoDump(config.uri, dbName, collName, changedQuery, dumpOutDir);
         }
 
@@ -266,8 +287,18 @@ async function backupDb(dbName, dbType, forceFull, id, trigger, appendOnly) {
             trackingData.push({ op: 'track', collection: collName, deletes: deletedIds, upserts: upsertedIds });
         }
 
-        // Give MongoDB's WiredTiger cache a moment to evict and checkpoint
-        await sleep(COLLECTION_PAUSE_MS);
+        plan.collections.push({
+            name: collName,
+            wouldDump: !!hasChanges,
+            docCount,
+            upserts: upsertedIds.length,
+            deletes: deletedIds.length,
+            mode: useAppendOnly ? 'append-only' : 'standard',
+        });
+
+        // Give MongoDB's WiredTiger cache a moment to evict and checkpoint.
+        // No need to throttle in dry-run since we're not pressuring the cache.
+        if (!dryRun) await sleep(COLLECTION_PAUSE_MS);
         processedCount++;
     }
 
@@ -296,8 +327,23 @@ async function backupDb(dbName, dbType, forceFull, id, trigger, appendOnly) {
         }
     }
 
-    if (trackingData.length > 0) {
+    plan.trackingOps = trackingData.length;
+
+    if (trackingData.length > 0 && !dryRun) {
         fs.writeFileSync(path.join(dir, `${slug}.tracking.json`), EJSON.stringify(trackingData), 'utf-8');
+    }
+
+    // Dry-run short-circuit: nothing was written, so there's nothing to size,
+    // hash, or commit to the manifest. Return the plan; the caller decides
+    // how to render it.
+    if (dryRun) {
+        plan.touchedCollections = touchedCollections;
+        plan.dryRun = true;
+        logger.info(
+            { dbType, dbName, id, type: plan.type, collections: plan.collections.length, trackingOps: plan.trackingOps },
+            'DRY RUN — no files written, no manifest update',
+        );
+        return plan;
     }
 
     // Size tracking is best-effort — a failure here must not prevent the manifest
@@ -350,6 +396,23 @@ async function backupDb(dbName, dbType, forceFull, id, trigger, appendOnly) {
 async function runBackup(opts = {}) {
     const trigger = opts.trigger ?? 'unknown';
     const triggerKind = (trigger === 'scheduled') ? 'scheduled' : 'manual';
+    const dryRun = !!opts.dryRun;
+
+    // Dry-run is purely a planning operation: it reads from MongoDB but writes
+    // nothing (no JSONLs, no mongodump, no manifest update, no `lastRuns`
+    // mutation). It also doesn't take the lock — concurrent operations might
+    // shift the numbers slightly, which is acceptable for a preview.
+    if (dryRun) {
+        const id = new Date().toISOString();
+        const results = [];
+        if ((!opts.target || opts.target === 'data' || opts.target === 'all') && config.dbData) {
+            results.push(await backupDb(config.dbData, 'data', opts.full ?? false, id, trigger, config.appendOnlyData, true));
+        }
+        if ((!opts.target || opts.target === 'parse' || opts.target === 'all') && config.dbParse) {
+            results.push(await backupDb(config.dbParse, 'parse', opts.full ?? false, id, trigger, config.appendOnlyParse, true));
+        }
+        return { dryRun: true, results };
+    }
 
     if (inFlight) {
         logger.warn({ trigger }, 'Backup skipped: another backup is already running in this process');
@@ -482,10 +545,145 @@ function seedLastRuns() {
     }
 }
 
+// Orphan cleanup: paths that look like a slug (`<dbBackupDir>/<slug>` dump dir,
+// `<dbBackupDir>/<slug>.tracking.json`, `<dbBackupDir>/ids/<slug>/`) but whose
+// slug isn't recorded in any manifest entry. These accumulate when a backup
+// crashes after writing some files but before `appendBackupEntry` runs — over
+// months on a busy schedule that's significant disk waste, and confuses
+// operators who `ls` the backup tree expecting one dir per manifest entry.
+
+const SLUG_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z$/;
+const TRACKING_PATTERN = /^(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)\.tracking\.json$/;
+// Don't touch anything younger than this — leaves a margin against the rare
+// case of a CLI invocation racing daemon startup. With "always exactly one
+// daemon" setups this is theoretical; the threshold is pure defense in depth.
+const ORPHAN_AGE_THRESHOLD_MS = 60 * 60 * 1000;
+
+/**
+ * Convert a slug back to its underlying Date. Slugs are
+ * `id.replace(/[:.]/g, '-')` of an ISO timestamp, so the inverse is just
+ * putting the punctuation back at the right positions. Returns null on a
+ * malformed slug — caller should treat that as "don't touch this dir".
+ */
+function slugToDate(slug) {
+    const m = slug.match(/^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})(Z)$/);
+    if (!m) return null;
+    const iso = `${m[1]}T${m[2]}:${m[3]}:${m[4]}.${m[5]}${m[6]}`;
+    const d = new Date(iso);
+    return Number.isFinite(d.getTime()) ? d : null;
+}
+
+/**
+ * Find and delete files left behind by crashed backups. Identifies any
+ * slug-shaped path on disk that does NOT correspond to a manifest entry, and
+ * is older than ORPHAN_AGE_THRESHOLD_MS, and removes it. Safe to call on
+ * every daemon start.
+ */
+function cleanupOrphans() {
+    const now = Date.now();
+
+    for (const dbType of configuredDbTypes()) {
+        const dir = dbBackupDir(dbType);
+        if (!fs.existsSync(dir)) continue;
+
+        let knownSlugs;
+        try {
+            const manifest = readManifest(dir);
+            knownSlugs = new Set(
+                manifest.backups
+                    .map((b) => b.idDir || (b.id && b.id.replace(/[:.]/g, '-')))
+                    .filter(Boolean)
+            );
+        } catch (err) {
+            logger.warn({ err, dbType }, 'Could not read manifest during orphan cleanup; skipping');
+            continue;
+        }
+
+        const removed = [];
+
+        // Walk the top of <dbBackupDir>: dump dirs (slug-named directories) and
+        // tracking files (`<slug>.tracking.json`). Anything else (manifest.json,
+        // .backup.lock, the `ids/` dir itself) is left alone.
+        let topEntries;
+        try { topEntries = fs.readdirSync(dir, { withFileTypes: true }); }
+        catch (err) {
+            logger.warn({ err, dbType }, 'Could not read backup dir during orphan cleanup');
+            continue;
+        }
+
+        for (const e of topEntries) {
+            // Slug-named directory = orphan dump dir candidate
+            if (e.isDirectory() && SLUG_PATTERN.test(e.name)) {
+                if (knownSlugs.has(e.name)) continue;
+                const slugDate = slugToDate(e.name);
+                if (!slugDate || (now - slugDate.getTime()) < ORPHAN_AGE_THRESHOLD_MS) continue;
+                const target = path.join(dir, e.name);
+                try {
+                    fs.rmSync(target, { recursive: true, force: true });
+                    removed.push(e.name + '/');
+                } catch (err) {
+                    logger.warn({ err, target }, 'Failed to remove orphan dump dir');
+                }
+                continue;
+            }
+
+            // <slug>.tracking.json = orphan tracking file candidate
+            if (e.isFile()) {
+                const m = e.name.match(TRACKING_PATTERN);
+                if (!m) continue;
+                const slug = m[1];
+                if (knownSlugs.has(slug)) continue;
+                const slugDate = slugToDate(slug);
+                if (!slugDate || (now - slugDate.getTime()) < ORPHAN_AGE_THRESHOLD_MS) continue;
+                const target = path.join(dir, e.name);
+                try {
+                    fs.unlinkSync(target);
+                    removed.push(e.name);
+                } catch (err) {
+                    logger.warn({ err, target }, 'Failed to remove orphan tracking file');
+                }
+            }
+        }
+
+        // ids/<slug>/ — orphan id-snapshot directory candidate
+        const idsRoot = path.join(dir, 'ids');
+        if (fs.existsSync(idsRoot)) {
+            let idsEntries;
+            try { idsEntries = fs.readdirSync(idsRoot, { withFileTypes: true }); }
+            catch (err) {
+                logger.warn({ err, dbType }, 'Could not read ids/ during orphan cleanup');
+                idsEntries = [];
+            }
+            for (const e of idsEntries) {
+                if (!e.isDirectory()) continue;
+                if (!SLUG_PATTERN.test(e.name)) continue;
+                if (knownSlugs.has(e.name)) continue;
+                const slugDate = slugToDate(e.name);
+                if (!slugDate || (now - slugDate.getTime()) < ORPHAN_AGE_THRESHOLD_MS) continue;
+                const target = path.join(idsRoot, e.name);
+                try {
+                    fs.rmSync(target, { recursive: true, force: true });
+                    removed.push('ids/' + e.name + '/');
+                } catch (err) {
+                    logger.warn({ err, target }, 'Failed to remove orphan ids dir');
+                }
+            }
+        }
+
+        if (removed.length > 0) {
+            logger.info(
+                { dbType, count: removed.length, sample: removed.slice(0, 5) },
+                'Cleaned up orphan files from a previous crashed backup',
+            );
+        }
+    }
+}
+
 /** Run all daemon-startup tasks. CLI invocations should NOT call this. */
 function runStartupTasks() {
     backfillSizes();
+    cleanupOrphans();
     seedLastRuns();
 }
 
-module.exports = { runBackup, getRunStats, runStartupTasks };
+module.exports = { runBackup, getRunStats, runStartupTasks, cleanupOrphans };
