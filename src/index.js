@@ -6,7 +6,7 @@ const logger = require('./logger');
 
 // If any CLI subcommands are passed, delegate to the CLI parser
 const args = process.argv.slice(2);
-const CLI_COMMANDS = ['backup', 'restore', 'list', 'init', '--help', '-h', '--version', '-V'];
+const CLI_COMMANDS = ['backup', 'restore', 'list', 'verify', 'init', '--help', '-h', '--version', '-V'];
 
 if (args.length && CLI_COMMANDS.some((cmd) => args[0] === cmd || args[0].startsWith('-'))) {
     // CLI mode — load and parse

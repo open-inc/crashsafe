@@ -71,9 +71,16 @@ services:
       PARSE_DB: "parse"
       COLLECTION_PREFIX: "sensors---"
       CONFIG_COLLECTION: "config"
+      CRASHSAFE_BACKUP_DIR: "/backups"
       PORT: "3001"
     ports:
       - "127.0.0.1:3001:3001"
+    # The integrity-verify phase of the auto-test corrupts a single byte in a
+    # backup dump file to prove `verify` actually catches it. That requires
+    # write access to the backup tree. Production deploys must NOT mount this
+    # — testapp is a test harness only.
+    volumes:
+      - ./backups:/backups
     networks: [test-net]
 
 volumes:

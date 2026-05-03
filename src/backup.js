@@ -6,6 +6,7 @@ const { BSON: { EJSON } } = require('mongodb');
 const { execFile } = require('node:child_process');
 const { getDb, disconnect } = require('./db');
 const { appendBackupEntry, readManifest, writeManifest, computeBackupSize } = require('./manifest');
+const { computeBackupChecksums } = require('./checksum');
 const { tryAcquireLock, releaseLock, updateLockProgress } = require('./locking');
 const config = require('./config');
 const logger = require('./logger');
@@ -309,7 +310,11 @@ async function backupDb(dbName, dbType, forceFull, id, trigger, appendOnly) {
         logger.warn({ err, dbType, slug }, 'Failed to compute backup size; manifest entry will be written without it');
     }
 
-    appendBackupEntry(dir, {
+    // Build the entry up-front so checksum computation can read the same shape
+    // verify will. Checksums are best-effort for the same reason as size:
+    // failing to hash should not break the chain. The next inc would be forced
+    // back to a full if we aborted here.
+    const entryDraft = {
         id,
         type: isFull ? 'full' : 'incremental',
         dbType,
@@ -320,7 +325,16 @@ async function backupDb(dbName, dbType, forceFull, id, trigger, appendOnly) {
         size,
         trigger: trigger ?? 'unknown',
         finishedAt: new Date().toISOString(),
-    });
+    };
+
+    let checksums = null;
+    try {
+        checksums = await computeBackupChecksums(dir, entryDraft);
+    } catch (err) {
+        logger.warn({ err, dbType, slug }, 'Failed to compute backup checksums; manifest entry will be written without them');
+    }
+
+    appendBackupEntry(dir, { ...entryDraft, checksums });
 
     logger.info(
         { dbType, dbName, id, type: isFull ? 'full' : 'incremental' },

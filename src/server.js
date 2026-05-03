@@ -5,6 +5,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { runBackup, getRunStats } = require('./backup');
 const { runRestore, getRestoreStats } = require('./restore');
+const { runVerify, getVerifyStats } = require('./verify');
 const { readManifest } = require('./manifest');
 const { readLockInfo } = require('./locking');
 const scheduler = require('./scheduler');
@@ -131,6 +132,7 @@ const requestHandler = async (req, res) => {
             scheduler: scheduler.getStatus(),
             runs: getRunStats(),
             lastRestore: getRestoreStats(),
+            lastVerify: getVerifyStats(),
             inFlight: readLockInfo(),
             backups: getLatestBackups(),
             config: {
@@ -196,9 +198,42 @@ const requestHandler = async (req, res) => {
                         }
                     })
                     .catch(err => logger.error({ err }, 'Manual restore failed'));
-                
+
                 res.writeHead(202, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ message: 'Restore started' }));
+            } catch (err) {
+                res.writeHead(400);
+                res.end(JSON.stringify({ error: 'Invalid request' }));
+            }
+        });
+        return;
+    }
+
+    // API: Trigger Verify
+    // The body is { target?, backupId?, deep? }. Same async pattern as
+    // /api/trigger/backup — 202 returns immediately, completion is observed
+    // by polling /api/status (lastVerify + inFlight).
+    if (method === 'POST' && url === '/api/trigger/verify') {
+        let body = '';
+        req.on('data', chunk => { body += chunk; });
+        req.on('end', async () => {
+            try {
+                const data = JSON.parse(body || '{}');
+                const target = data.target || 'all';
+                const backupId = data.backupId || null;
+                const deep = !!data.deep;
+                logger.info({ target, backupId, deep }, 'Manual verify triggered via API');
+
+                runVerify({ target, backupId, deep, trigger: 'api' })
+                    .then((result) => {
+                        if (result?.skipped) {
+                            logger.warn({ reason: result.reason, holder: result.holder }, 'Manual verify skipped (another operation in progress)');
+                        }
+                    })
+                    .catch(err => logger.error({ err }, 'Manual verify failed'));
+
+                res.writeHead(202, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ message: 'Verify started' }));
             } catch (err) {
                 res.writeHead(400);
                 res.end(JSON.stringify({ error: 'Invalid request' }));

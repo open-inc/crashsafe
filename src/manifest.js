@@ -170,4 +170,8 @@ module.exports = { readManifest, writeManifest, appendBackupEntry, findEntry, ge
  * @property {number}   [size]       Total disk usage of this backup in bytes (dump + tracking + id snapshot). Optional for entries written before size tracking existed; backfilled lazily on daemon start.
  * @property {string}   [trigger]    Origin of the run that wrote this entry: 'scheduled' | 'api' | 'cli'. Optional for entries written before trigger persistence existed.
  * @property {string}   [finishedAt] ISO timestamp when this DB's portion of the run completed. Optional for entries written before this field existed.
+ * @property {object}   [checksums]  SHA-256 hex digests of every file produced by this backup, keyed by path relative to dbBackupDir. Split into three sections so verify failures can be triaged: `dump` corrupt blocks restore; `tracking` corrupt blocks delete/upsert replay; `ids` corrupt blocks inc-chain delete detection. Each section is null when no file of that kind exists for the entry. Optional for entries written before checksum tracking existed; verify reports those as 'no-baseline' rather than failing.
+ * @property {object}   [checksums.dump]      Map of `<file dump path relative to dbBackupDir>` → hex sha256
+ * @property {object}   [checksums.tracking]  Map containing the single tracking-file path → hex sha256
+ * @property {object}   [checksums.ids]       Map of `<id-snapshot path relative to dbBackupDir>` → hex sha256
  */

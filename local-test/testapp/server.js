@@ -3,7 +3,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { MongoClient, ObjectId } = require('mongodb');
+const { MongoClient, ObjectId, BSON: { EJSON } } = require('mongodb');
 
 const URI                 = process.env.MONGO_URI || 'mongodb://admin:password@mongodb/?authSource=admin';
 const DATA_DB             = process.env.DATA_DB || 'owdata';
@@ -272,13 +272,39 @@ async function csFetch(pathPart, opts = {}) {
 
 /**
  * Hash a collection's contents in a stable order. Returns { count, hash }.
- * Uses canonical JSON via mongo's BSON-aware EJSON-ish toJSON serialization.
+ *
+ * Uses **canonical EJSON** (mongo's `EJSON.stringify` with `relaxed: false`),
+ * not plain JSON.stringify, because the latter is lossy on BSON sondertypes:
+ * `Date` collapses to an ISO string, `ObjectId`/`Decimal128`/`Binary` to plain
+ * strings. A backup→restore that silently changes a Date into a string would
+ * NOT be caught by JSON.stringify-based hashing — both serialize identically.
+ *
+ * Keys are sorted recursively before stringifying so a roundtrip that reorders
+ * fields (mongorestore is allowed to) doesn't produce a false mismatch.
  */
 async function fingerprintCollection(dbName, collName) {
     const docs = await client.db(dbName).collection(collName).find({}).sort({ _id: 1 }).toArray();
     const hash = crypto.createHash('sha256');
-    for (const doc of docs) hash.update(JSON.stringify(doc));
+    for (const doc of docs) {
+        hash.update(EJSON.stringify(sortKeysDeep(doc), { relaxed: false }));
+    }
     return { count: docs.length, hash: hash.digest('hex') };
+}
+
+/**
+ * Recursively sort object keys. Arrays keep their order (order is semantic in
+ * BSON arrays); plain objects get keys lexicographically sorted. BSON typed
+ * values (ObjectId, Date, Decimal128, etc.) are not plain Objects — they're
+ * passed through untouched so EJSON's serializer can identify them.
+ */
+function sortKeysDeep(value) {
+    if (Array.isArray(value)) return value.map(sortKeysDeep);
+    if (value && typeof value === 'object' && value.constructor === Object) {
+        const out = {};
+        for (const k of Object.keys(value).sort()) out[k] = sortKeysDeep(value[k]);
+        return out;
+    }
+    return value;
 }
 
 async function fingerprintAll() {
@@ -384,6 +410,13 @@ async function waitForCompletion(kind, baseline, timeoutMs = 10 * 60 * 1000) {
                 if (r.status !== 'success') throw new Error('Restore ended with status: ' + r.status + ' — ' + (r.error || ''));
                 return r;
             }
+        } else if (kind === 'verify') {
+            const r = status.lastVerify ?? null;
+            // Verify uses three statuses: success, warnings, failure. Caller
+            // decides which it expects — return the record either way.
+            if (!inFlight && r && r.finishedAt !== baseline?.finishedAt) {
+                return r;
+            }
         }
         await sleep(1500);
     }
@@ -463,6 +496,18 @@ async function runAutoTest() {
         // mongodump writes per-collection metadata.json with index defs; if a
         // future change ever drops that, we want the auto-test to scream.
         verifyIndexes: newStep('verify-indexes',  'Verify updatedAt indexes exist on backed-up collections after restore'),
+
+        // Phase O — Integrity verification (SHA-256 round-trip + corruption detection).
+        // First trigger a clean verify to confirm every backup written this run
+        // has matching checksums. Then corrupt a single byte in a real dump
+        // file and re-verify — the second pass MUST report it as corrupt.
+        // Finally restore the byte and re-verify, so the test leaves the
+        // backup tree consistent for any follow-up run.
+        verifyCleanRun:  newStep('verify-clean',    'Trigger /api/verify and confirm all written backups pass'),
+        corruptBackup:   newStep('corrupt-backup',  'Corrupt one byte in a real .bson.gz dump file'),
+        verifyDetectsCorruption: newStep('verify-detects', 'Trigger /api/verify and confirm the corruption is detected'),
+        repairBackup:    newStep('repair-backup',   'Restore the byte to leave the backup tree consistent'),
+        verifyRepaired:  newStep('verify-repaired', 'Trigger /api/verify and confirm everything is clean again'),
 
         // Phase J — Manifest audit
         audit:        newStep('audit',            'Audit: verify backup count and size tracking'),
@@ -1124,6 +1169,126 @@ async function runAutoTest() {
                 );
             }
             return { collectionsChecked: checks.length, allHaveUpdatedAtIndex: true };
+        });
+
+        // ---- Phase O: Integrity verification (SHA-256 round-trip) -----------------------
+        // Backups got checksums written under the new code. Verify that:
+        //   1. A clean run reports every entry as ok.
+        //   2. A 1-byte corruption in a real dump file is reliably detected.
+        //   3. Repairing the byte returns the run to ok.
+        // The corruption step uses CRASHSAFE_BACKUP_DIR (the volume mount) to
+        // reach into the backup tree. testapp must NOT have this mount in
+        // production setups — it's a test-harness convenience only.
+        const BACKUP_DIR = process.env.CRASHSAFE_BACKUP_DIR;
+        let corruptedFile = null;
+        let originalLastByte = null;
+
+        await runStep(steps.verifyCleanRun, async () => {
+            const before = await csFetch('/api/status');
+            const baseline = before.lastVerify ?? null;
+            await csFetch('/api/trigger/verify', {
+                method: 'POST',
+                body: JSON.stringify({ target: 'all' }),
+            });
+            const r = await waitForCompletion('verify', baseline);
+            // Allow 'warnings' too — old backups that pre-date this build would
+            // appear as no-baseline. In a fresh local-test run there are none.
+            if (r.status !== 'success' && r.status !== 'warnings') {
+                throw new Error('Initial verify expected success/warnings, got: ' + r.status + ' (' + JSON.stringify(r.summary) + ')');
+            }
+            if ((r.summary?.corrupt ?? 0) > 0) {
+                throw new Error('Initial verify reported corruption with no tampering: ' + JSON.stringify(r.summary));
+            }
+            return { status: r.status, summary: r.summary };
+        });
+
+        await runStep(steps.corruptBackup, async () => {
+            if (!BACKUP_DIR) throw new Error('CRASHSAFE_BACKUP_DIR not set — testapp container needs the /backups volume mount for this phase');
+
+            // Find the most recent data-DB dump file (any *.bson.gz) and flip
+            // its last byte. We use the most-recent so chain-replay tests in
+            // earlier phases that might re-touch older files won't drift.
+            const dataRoot = path.join(BACKUP_DIR, 'data');
+            if (!fs.existsSync(dataRoot)) throw new Error('Backup dir not visible at ' + dataRoot);
+
+            // Pick the newest slug directory (slug = ISO-timestamp with -)
+            const slugs = fs.readdirSync(dataRoot, { withFileTypes: true })
+                .filter(e => e.isDirectory() && e.name !== 'ids')
+                .map(e => e.name)
+                .sort()
+                .reverse();
+            if (!slugs.length) throw new Error('No backup slug directories under ' + dataRoot);
+
+            // Walk slug dir to find a .bson.gz file
+            function findBson(dir) {
+                for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+                    const p = path.join(dir, e.name);
+                    if (e.isDirectory()) {
+                        const r = findBson(p);
+                        if (r) return r;
+                    } else if (e.isFile() && e.name.endsWith('.bson.gz')) {
+                        return p;
+                    }
+                }
+                return null;
+            }
+            let target = null;
+            for (const s of slugs) {
+                target = findBson(path.join(dataRoot, s));
+                if (target) break;
+            }
+            if (!target) throw new Error('No .bson.gz file found in any backup slug — nothing to corrupt');
+
+            const buf = fs.readFileSync(target);
+            originalLastByte = buf[buf.length - 1];
+            buf[buf.length - 1] ^= 0xff;
+            fs.writeFileSync(target, buf);
+            corruptedFile = target;
+            return { corrupted: path.relative(BACKUP_DIR, target) };
+        });
+
+        await runStep(steps.verifyDetectsCorruption, async () => {
+            const before = await csFetch('/api/status');
+            const baseline = before.lastVerify ?? null;
+            await csFetch('/api/trigger/verify', {
+                method: 'POST',
+                body: JSON.stringify({ target: 'all' }),
+            });
+            const r = await waitForCompletion('verify', baseline);
+            if (r.status !== 'failure') {
+                throw new Error('Expected verify to detect corruption, got status=' + r.status + ' (' + JSON.stringify(r.summary) + ')');
+            }
+            if ((r.summary?.corrupt ?? 0) === 0) {
+                throw new Error('Verify status was failure but summary.corrupt is 0 — that should not happen');
+            }
+            return { status: r.status, corruptEntries: r.summary.corrupt };
+        });
+
+        await runStep(steps.repairBackup, async () => {
+            if (!corruptedFile || originalLastByte == null) {
+                throw new Error('No corrupted file recorded; cannot repair');
+            }
+            const buf = fs.readFileSync(corruptedFile);
+            buf[buf.length - 1] = originalLastByte;
+            fs.writeFileSync(corruptedFile, buf);
+            return { repaired: path.relative(BACKUP_DIR, corruptedFile) };
+        });
+
+        await runStep(steps.verifyRepaired, async () => {
+            const before = await csFetch('/api/status');
+            const baseline = before.lastVerify ?? null;
+            await csFetch('/api/trigger/verify', {
+                method: 'POST',
+                body: JSON.stringify({ target: 'all' }),
+            });
+            const r = await waitForCompletion('verify', baseline);
+            if (r.status !== 'success' && r.status !== 'warnings') {
+                throw new Error('After repair, expected verify success/warnings, got: ' + r.status + ' (' + JSON.stringify(r.summary) + ')');
+            }
+            if ((r.summary?.corrupt ?? 0) > 0) {
+                throw new Error('After repair, verify still reports corruption: ' + JSON.stringify(r.summary));
+            }
+            return { status: r.status, summary: r.summary };
         });
 
         // ---- Phase J: Manifest audit ----------------------------------------------------
