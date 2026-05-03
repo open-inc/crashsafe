@@ -1,0 +1,12 @@
+{
+  "name": "crashsafe-test-harness",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "mongodb": "^6.6.2"
+  }
+}

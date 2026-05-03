@@ -1,754 +1,1644 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MongoDB CrashSafe</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CrashSafe</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="https://unpkg.com/antd@5/dist/reset.css" />
     <style>
-        :root {
-            --bg:           #0b111e;
-            --panel:        #111827;
-            --card:         #131c2e;
-            --border:       #1f2a40;
-            --border-soft:  #182236;
-            --text:         #e6e9ef;
-            --text-2:       #98a1b2;
-            --muted:        #5e6577;
+      :root {
+        --page-bg: #f3f6f8;
+        --page-tint: #eef8f4;
+        --ink: #10212b;
+        --muted: #6f8391;
+        --panel: rgba(255, 255, 255, 0.84);
+        --panel-strong: #ffffff;
+        --line: rgba(16, 33, 43, 0.1);
+        --shadow: 0 24px 80px rgba(16, 33, 43, 0.08);
+        --teal: #1f9d77;
+        --teal-soft: #dff5ed;
+        --gold-soft: #fff4d8;
+        --red-soft: #fff0ec;
+        --blue-soft: #ebf6ff;
+      }
 
-            --primary:      #2563eb;
-            --primary-hover:#1d4ed8;
-            --success:      #10b981;
-            --warning:      #f59e0b;
-            --error:        #ef4444;
-            --accent:       #6366f1;
-        }
+      * {
+        box-sizing: border-box;
+      }
 
-        * { box-sizing: border-box; margin: 0; padding: 0; }
+      html,
+      body,
+      #root {
+        min-height: 100%;
+      }
 
-        body {
-            font-family: 'Inter', -apple-system, system-ui, sans-serif;
-            background: var(--bg);
-            color: var(--text);
-            min-height: 100vh;
-            padding: 2.5rem 1.5rem 4rem;
-            -webkit-font-smoothing: antialiased;
-            font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
-        }
+      body {
+        margin: 0;
+        font-family: "Plus Jakarta Sans", sans-serif;
+        color: var(--ink);
+        background:
+          radial-gradient(
+            circle at top left,
+            rgba(31, 157, 119, 0.11),
+            transparent 22%
+          ),
+          radial-gradient(
+            circle at top right,
+            rgba(98, 168, 220, 0.11),
+            transparent 20%
+          ),
+          linear-gradient(
+            180deg,
+            var(--page-tint) 0%,
+            var(--page-bg) 42%,
+            #f7f8fa 100%
+          );
+      }
 
-        .container {
-            width: 100%;
-            max-width: 1180px;
-            margin: 0 auto;
-        }
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        background-image:
+          linear-gradient(rgba(16, 33, 43, 0.03) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(16, 33, 43, 0.03) 1px, transparent 1px);
+        background-size: 32px 32px;
+        mask-image: linear-gradient(
+          180deg,
+          rgba(0, 0, 0, 0.4),
+          transparent 75%
+        );
+      }
 
-        /* Header */
-        header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding-bottom: 1.5rem;
-            margin-bottom: 2rem;
-            border-bottom: 1px solid var(--border-soft);
-        }
-        .brand { display: flex; align-items: baseline; gap: 0.6rem; }
-        .brand h1 {
-            font-size: 1.25rem;
-            font-weight: 700;
-            letter-spacing: -0.01em;
-        }
-        .brand .tag {
-            font-size: 0.75rem;
-            color: var(--muted);
-            font-weight: 500;
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
-        }
+      .app-shell {
+        min-height: 100vh;
+        padding: 24px;
+        position: relative;
+        z-index: 1;
+      }
 
-        .status-badge {
-            padding: 0.3rem 0.75rem;
-            border-radius: 6px;
-            font-size: 0.75rem;
-            font-weight: 600;
-            display: inline-flex;
-            align-items: center;
-            gap: 0.5rem;
-            background: rgba(16, 185, 129, 0.1);
-            color: var(--success);
-            border: 1px solid rgba(16, 185, 129, 0.25);
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-        }
-        .status-badge.running {
-            background: rgba(99, 102, 241, 0.1);
-            color: #a5b4fc;
-            border-color: rgba(99, 102, 241, 0.3);
-        }
-        .status-badge::before {
-            content: '';
-            width: 6px;
-            height: 6px;
-            border-radius: 50%;
-            background: currentColor;
-        }
+      .page-wrap {
+        max-width: 1320px;
+        margin: 0 auto;
+      }
 
-        /* Section heading */
-        .section-title {
-            font-size: 0.7rem;
-            text-transform: uppercase;
-            letter-spacing: 0.08em;
-            color: var(--muted);
-            font-weight: 600;
-            margin: 2rem 0 0.85rem;
-        }
+      .hero-card,
+      .surface-card,
+      .db-card,
+      .history-card {
+        backdrop-filter: blur(16px);
+        background: var(--panel);
+        border: 1px solid rgba(255, 255, 255, 0.68);
+        box-shadow: var(--shadow);
+      }
 
-        /* Stat grid */
-        .stat-grid {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 1rem;
-        }
-        @media (max-width: 900px) {
-            .stat-grid { grid-template-columns: repeat(2, 1fr); }
-        }
+      .hero-card {
+        overflow: hidden;
+        border-radius: 32px;
+        background: linear-gradient(
+          140deg,
+          rgba(255, 255, 255, 0.93),
+          rgba(247, 252, 249, 0.88) 48%,
+          rgba(235, 246, 255, 0.92)
+        );
+      }
 
-        .stat-card {
-            background: var(--card);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 1.1rem 1.25rem;
-        }
-        .stat-card .label {
-            font-size: 0.7rem;
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
-            color: var(--muted);
-            font-weight: 600;
-            margin-bottom: 0.5rem;
-        }
-        .stat-card .value {
-            font-size: 1.4rem;
-            font-weight: 600;
-            letter-spacing: -0.01em;
-            font-variant-numeric: tabular-nums;
-        }
-        .stat-card .sub {
-            font-size: 0.78rem;
-            color: var(--text-2);
-            margin-top: 0.35rem;
-        }
+      .hero-topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+        margin-bottom: 20px;
+      }
 
-        /* DB cards */
+      .hero-kicker {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 14px;
+        border-radius: 999px;
+        background: rgba(31, 157, 119, 0.08);
+        color: #157457;
+        font-size: 12px;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.14em;
+      }
+
+      .hero-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.5fr) minmax(280px, 0.9fr);
+        gap: 24px;
+        align-items: stretch;
+      }
+
+      .hero-copy {
+        padding-right: 8px;
+      }
+
+      .hero-copy h1 {
+        margin: 0;
+        font-size: clamp(36px, 6vw, 64px);
+        line-height: 0.95;
+        letter-spacing: -0.06em;
+        font-weight: 800;
+        color: #10212b;
+      }
+
+      .hero-copy p {
+        margin: 18px 0 0;
+        max-width: 720px;
+        color: var(--muted);
+        font-size: 16px;
+        line-height: 1.72;
+      }
+
+      .hero-rail {
+        display: grid;
+        gap: 14px;
+      }
+
+      .hero-rail-card {
+        border-radius: 24px;
+        padding: 18px 20px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.7);
+      }
+
+      .hero-rail-card .eyebrow {
+        font-size: 11px;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.16em;
+        color: #7f95a3;
+        margin-bottom: 10px;
+      }
+
+      .hero-rail-card .value {
+        font-size: 22px;
+        font-weight: 800;
+        letter-spacing: -0.04em;
+        color: #10212b;
+      }
+
+      .hero-rail-card .hint {
+        margin-top: 6px;
+        color: var(--muted);
+        line-height: 1.6;
+        font-size: 13px;
+      }
+
+      .section-block {
+        margin-top: 22px;
+      }
+
+      .section-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+
+      .section-label {
+        font-size: 12px;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        font-weight: 800;
+        color: #6f8391;
+      }
+
+      .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+        gap: 14px;
+      }
+
+      .surface-card {
+        border-radius: 24px;
+      }
+
+      .metric-card {
+        border-radius: 24px;
+        min-height: 148px;
+        overflow: hidden;
+      }
+
+      .metric-card.teal {
+        background: linear-gradient(180deg, #ffffff, #f4fcf8);
+      }
+
+      .metric-card.blue {
+        background: linear-gradient(180deg, #ffffff, #f4f9ff);
+      }
+
+      .metric-card.gold {
+        background: linear-gradient(180deg, #ffffff, #fffaf0);
+      }
+
+      .metric-card.red {
+        background: linear-gradient(180deg, #ffffff, #fff6f4);
+      }
+
+      .metric-card .ant-statistic {
+        height: 100%;
+      }
+
+      .metric-card .ant-statistic-content {
+        font-size: 30px;
+        font-weight: 800;
+        letter-spacing: -0.05em;
+        color: #10212b;
+      }
+
+      .metric-card .ant-statistic-title {
+        color: #7a8b95;
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        margin-bottom: 18px;
+      }
+
+      .metric-sub {
+        margin-top: 14px;
+        font-size: 13px;
+        line-height: 1.5;
+        color: var(--muted);
+      }
+
+      .db-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 16px;
+      }
+
+      .db-card {
+        border-radius: 28px;
+        overflow: hidden;
+      }
+
+      .db-card .ant-card-body {
+        padding: 22px;
+      }
+
+      .db-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 18px;
+      }
+
+      .db-title {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+
+      .db-name {
+        font-size: 24px;
+        font-weight: 800;
+        letter-spacing: -0.04em;
+        color: #10212b;
+      }
+
+      .db-meta {
+        margin-top: 10px;
+        font-size: 13px;
+        color: var(--muted);
+        line-height: 1.6;
+      }
+
+      .db-count {
+        min-width: 132px;
+        padding: 14px 16px;
+        border-radius: 20px;
+        background: rgba(16, 33, 43, 0.03);
+        border: 1px solid rgba(16, 33, 43, 0.06);
+        text-align: right;
+      }
+
+      .db-count .big {
+        font-size: 30px;
+        font-weight: 800;
+        letter-spacing: -0.05em;
+        line-height: 1;
+      }
+
+      .db-count .small {
+        margin-top: 6px;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      .action-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 10px;
+      }
+
+      .action-grid .ant-btn {
+        height: 42px;
+        border-radius: 14px;
+        font-weight: 700;
+      }
+
+      .db-help {
+        margin-top: 18px;
+      }
+
+      .db-help .ant-list-item {
+        padding: 12px 0;
+        align-items: flex-start;
+      }
+
+      .db-help .item-title {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-weight: 700;
+        color: #10212b;
+        margin-bottom: 4px;
+      }
+
+      .db-help .item-copy {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.65;
+      }
+
+      .chain-note {
+        margin-top: 16px;
+        border-radius: 18px;
+        padding: 16px 18px;
+        background: var(--blue-soft);
+        border: 1px solid rgba(98, 168, 220, 0.14);
+      }
+
+      .chain-note strong {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 13px;
+        color: #174965;
+        letter-spacing: 0.02em;
+      }
+
+      .chain-note span {
+        color: #5a6f7d;
+        font-size: 13px;
+        line-height: 1.65;
+      }
+
+      .history-card {
+        border-radius: 20px;
+        margin-top: 16px;
+      }
+
+      .history-card .ant-card-body {
+        padding: 14px 16px 8px;
+      }
+
+      .history-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 12px;
+      }
+
+      .history-title span {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.14em;
+        font-weight: 800;
+        color: #7a8b95;
+      }
+
+      .mono {
+        font-family: "IBM Plex Mono", monospace;
+      }
+
+      .empty-hint {
+        color: var(--muted);
+        font-size: 13px;
+        padding: 6px 0 10px;
+      }
+
+      .overlay-meta {
+        display: grid;
+        gap: 8px;
+        margin-top: 10px;
+      }
+
+      .overlay-meta-line {
+        color: #5e7381;
+        line-height: 1.7;
+        font-size: 13px;
+      }
+
+      .overlay-meta-line strong {
+        color: #10212b;
+      }
+
+      .restore-select-label {
+        display: block;
+        font-size: 12px;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.14em;
+        color: #7a8b95;
+        margin-bottom: 10px;
+      }
+
+      .custom-table .ant-table {
+        background: transparent;
+      }
+
+      .custom-table .ant-table-thead > tr > th {
+        background: transparent;
+        color: #7a8b95;
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+
+      .custom-table .ant-table-tbody > tr > td {
+        font-size: 13px;
+        color: #203541;
+      }
+
+      .footer-note {
+        margin-top: 24px;
+        text-align: center;
+        color: #7c8b95;
+        font-size: 13px;
+      }
+
+      @media (max-width: 1100px) {
+        .hero-grid,
         .db-grid {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 1rem;
+          grid-template-columns: 1fr;
         }
-        @media (max-width: 900px) {
-            .db-grid { grid-template-columns: 1fr; }
-        }
-        .db-card {
-            background: var(--card);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 1.5rem;
-        }
-        .db-card .db-head {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            margin-bottom: 1.25rem;
-            padding-bottom: 1.25rem;
-            border-bottom: 1px solid var(--border-soft);
-        }
-        .db-card .db-name {
-            font-size: 1rem;
-            font-weight: 600;
-            letter-spacing: -0.005em;
-        }
-        .db-card .db-type {
-            display: inline-block;
-            font-size: 0.65rem;
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
-            color: var(--text-2);
-            background: var(--border-soft);
-            padding: 0.15rem 0.5rem;
-            border-radius: 4px;
-            margin-left: 0.5rem;
-            vertical-align: middle;
-        }
-        .db-card .db-meta {
-            margin-top: 0.5rem;
-            font-size: 0.78rem;
-            color: var(--text-2);
-            font-variant-numeric: tabular-nums;
-        }
-        .db-card .db-stats {
-            text-align: right;
-            font-size: 0.78rem;
-            color: var(--text-2);
-            font-variant-numeric: tabular-nums;
-        }
-        .db-card .db-stats strong {
-            display: block;
-            font-size: 1rem;
-            font-weight: 600;
-            color: var(--text);
-            margin-bottom: 0.15rem;
+      }
+
+      @media (max-width: 768px) {
+        .app-shell {
+          padding: 14px;
         }
 
-        /* Action buttons */
-        .actions-row {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 0.6rem;
-            margin-bottom: 1rem;
-        }
-        .btn {
-            padding: 0.6rem 0.9rem;
-            border-radius: 6px;
-            font-weight: 500;
-            font-size: 0.82rem;
-            font-family: inherit;
-            cursor: pointer;
-            transition: background 0.15s, border-color 0.15s, color 0.15s;
-            border: 1px solid transparent;
-            outline: none;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            gap: 0.4rem;
-        }
-        .btn:focus-visible { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--primary); }
-
-        .btn-primary { background: var(--primary); color: white; }
-        .btn-primary:hover { background: var(--primary-hover); }
-
-        .btn-secondary {
-            background: transparent;
-            color: var(--text);
-            border-color: var(--border);
-        }
-        .btn-secondary:hover {
-            background: var(--border-soft);
-            border-color: #2a3754;
+        .hero-card .ant-card-body,
+        .surface-card .ant-card-body,
+        .db-card .ant-card-body {
+          padding: 18px;
         }
 
-        .btn-danger {
-            background: transparent;
-            color: var(--error);
-            border-color: rgba(239, 68, 68, 0.3);
-        }
-        .btn-danger:hover {
-            background: rgba(239, 68, 68, 0.08);
-            border-color: rgba(239, 68, 68, 0.5);
+        .hero-copy h1 {
+          font-size: 42px;
         }
 
-        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-        /* Help box for actions */
-        .help-list {
-            margin-top: 0.5rem;
-            padding: 0.85rem 1rem;
-            background: rgba(255,255,255,0.015);
-            border: 1px solid var(--border-soft);
-            border-radius: 6px;
-            font-size: 0.78rem;
-            color: var(--text-2);
-            line-height: 1.5;
-        }
-        .help-list dt {
-            font-weight: 600;
-            color: var(--text);
-            display: inline;
-        }
-        .help-list dd { display: inline; margin: 0; }
-        .help-list .item { margin-bottom: 0.4rem; }
-        .help-list .item:last-child { margin-bottom: 0; }
-        .help-list .danger-tag {
-            display: inline-block;
-            font-size: 0.65rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: var(--error);
-            margin-right: 0.4rem;
+        .hero-topbar,
+        .db-header {
+          flex-direction: column;
+          align-items: stretch;
         }
 
-        /* In-flight banner */
-        .inflight {
-            background: rgba(99, 102, 241, 0.08);
-            border: 1px solid rgba(99, 102, 241, 0.3);
-            border-left: 3px solid var(--accent);
-            border-radius: 8px;
-            padding: 1rem 1.25rem;
-            margin-bottom: 1.5rem;
-            display: none;
-        }
-        .inflight.active { display: block; }
-        .inflight .title {
-            font-weight: 600;
-            font-size: 0.9rem;
-            color: #c7d2fe;
-            margin-bottom: 0.35rem;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-        .inflight .title::before {
-            content: '';
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: var(--accent);
-            animation: blink 1.6s ease-in-out infinite;
-        }
-        @keyframes blink { 50% { opacity: 0.25; } }
-        .inflight .meta { font-size: 0.8rem; color: var(--text-2); line-height: 1.5; }
-        .inflight .progress-bar {
-            background: var(--border-soft);
-            border-radius: 9999px;
-            height: 4px;
-            margin-top: 0.75rem;
-            overflow: hidden;
-        }
-        .inflight .progress-bar > div {
-            height: 100%;
-            background: var(--accent);
-            transition: width 0.4s ease;
+        .db-count {
+          text-align: left;
+          min-width: 0;
         }
 
-        /* History table */
-        details.history {
-            margin-top: 1.25rem;
-            border-top: 1px solid var(--border-soft);
-            padding-top: 1rem;
+        .action-grid {
+          grid-template-columns: 1fr;
         }
-        details.history summary {
-            cursor: pointer;
-            font-size: 0.7rem;
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
-            color: var(--text-2);
-            font-weight: 600;
-            user-select: none;
-            list-style: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 0.4rem;
-        }
-        details.history summary::-webkit-details-marker { display: none; }
-        details.history summary::before {
-            content: '▸';
-            font-size: 0.7rem;
-            transition: transform 0.15s;
-        }
-        details.history[open] summary::before { transform: rotate(90deg); }
-        details.history summary:hover { color: var(--text); }
-
-        .history-table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 0.85rem;
-            font-size: 0.8rem;
-            font-variant-numeric: tabular-nums;
-        }
-        .history-table th, .history-table td {
-            text-align: left;
-            padding: 0.5rem 0.6rem;
-            border-bottom: 1px solid var(--border-soft);
-        }
-        .history-table th {
-            font-weight: 600;
-            color: var(--muted);
-            font-size: 0.68rem;
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
-        }
-        .history-table tr:last-child td { border-bottom: none; }
-        .history-table .pill {
-            display: inline-block;
-            padding: 0.1rem 0.5rem;
-            border-radius: 4px;
-            font-size: 0.68rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-        }
-        .history-table .pill.full { background: rgba(99, 102, 241, 0.15); color: #a5b4fc; }
-        .history-table .pill.incremental { background: var(--border-soft); color: var(--text-2); }
-        .history-empty { color: var(--muted); font-size: 0.8rem; padding: 0.75rem 0; }
-
-        /* Modal */
-        .modal-overlay {
-            position: fixed;
-            inset: 0;
-            background: rgba(11, 17, 30, 0.85);
-            display: none;
-            justify-content: center;
-            align-items: center;
-            z-index: 1000;
-            padding: 1.5rem;
-        }
-        .modal {
-            background: var(--panel);
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            padding: 1.75rem;
-            width: 100%;
-            max-width: 480px;
-        }
-        .modal h2 { font-size: 1.05rem; font-weight: 600; margin-bottom: 0.5rem; }
-        .modal .modal-desc { color: var(--text-2); font-size: 0.85rem; margin-bottom: 1.25rem; line-height: 1.5; }
-        .modal select {
-            width: 100%;
-            background: var(--card);
-            border: 1px solid var(--border);
-            color: var(--text);
-            padding: 0.6rem 0.75rem;
-            border-radius: 6px;
-            margin-bottom: 1.25rem;
-            outline: none;
-            font-family: inherit;
-            font-size: 0.85rem;
-            font-variant-numeric: tabular-nums;
-        }
-        .modal select:focus { border-color: var(--primary); }
-        .modal select option { background: var(--card); }
-        .modal-actions { display: flex; justify-content: flex-end; gap: 0.6rem; }
-
-        /* Toast */
-        .toast-container {
-            position: fixed;
-            bottom: 1.5rem;
-            right: 1.5rem;
-            display: flex;
-            flex-direction: column;
-            gap: 0.6rem;
-            z-index: 2000;
-        }
-        .toast {
-            background: var(--panel);
-            border: 1px solid var(--border);
-            padding: 0.7rem 1rem;
-            border-radius: 6px;
-            font-size: 0.85rem;
-            animation: slideIn 0.2s ease-out;
-            min-width: 200px;
-        }
-        .toast.error { border-color: rgba(239, 68, 68, 0.4); }
-        @keyframes slideIn {
-            from { transform: translateX(20px); opacity: 0; }
-            to   { transform: translateX(0); opacity: 1; }
-        }
+      }
     </style>
-</head>
-<body>
-    <div class="container">
-        <header>
-            <div class="brand">
-                <h1>CrashSafe</h1>
-                <span class="tag">MongoDB Backup</span>
-            </div>
-            <div id="scheduler-status" class="status-badge">Active</div>
-        </header>
+  </head>
+  <body>
+    <div id="root"></div>
 
-        <div id="inflight" class="inflight">
-            <div class="title">Backup in progress</div>
-            <div class="meta" id="inflight-meta">—</div>
-            <div class="progress-bar"><div id="inflight-progress" style="width:0%"></div></div>
-        </div>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/dayjs/dayjs.min.js"></script>
+    <script src="https://unpkg.com/antd@5/dist/antd.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-        <div class="section-title">Overview</div>
-        <div class="stat-grid">
-            <div class="stat-card">
-                <div class="label">Schedule</div>
-                <div id="cron-val" class="value">—</div>
-                <div class="sub">Cron expression</div>
-            </div>
-            <div class="stat-card">
-                <div class="label">Last Scheduled Run</div>
-                <div id="last-scheduled-val" class="value">Never</div>
-                <div id="last-scheduled-sub" class="sub">No runs yet</div>
-            </div>
-            <div class="stat-card">
-                <div class="label">Last Manual Run</div>
-                <div id="last-manual-val" class="value">Never</div>
-                <div id="last-manual-sub" class="sub">No runs yet</div>
-            </div>
-            <div class="stat-card">
-                <div class="label">Total Disk Usage</div>
-                <div id="total-disk-val" class="value">0 B</div>
-                <div id="total-disk-sub" class="sub">Across all backups</div>
-            </div>
-        </div>
+    <script type="text/babel">
+      const {
+        Alert,
+        App: AntdApp,
+        Badge,
+        Button,
+        Card,
+        Col,
+        ConfigProvider,
+        Divider,
+        Layout,
+        List,
+        Modal,
+        Progress,
+        Row,
+        Select,
+        Space,
+        Statistic,
+        Table,
+        Tag,
+        Typography,
+        theme,
+      } = antd;
 
-        <div class="section-title">Databases</div>
-        <div id="database-cards" class="db-grid">
-            <!-- DB cards inserted here -->
-        </div>
-    </div>
+      const { useEffect, useMemo, useRef, useState } = React;
+      const { Content } = Layout;
+      const { Title, Text, Paragraph } = Typography;
 
-    <div id="restore-modal" class="modal-overlay">
-        <div class="modal">
-            <h2>Restore from a specific point</h2>
-            <p class="modal-desc">
-                Replays every backup from the selected entry up to the latest, applying changes on top of the current data. Existing collections are <strong>not dropped</strong> — modified or deleted documents from the chain are corrected in place.
-            </p>
-            <select id="backup-select"></select>
-            <div class="modal-actions">
-                <button onclick="closeRestoreModal()" class="btn btn-secondary">Cancel</button>
-                <button onclick="triggerRestoreFromModal()" id="restore-confirm-btn" class="btn btn-primary">Start Restore</button>
-            </div>
-        </div>
-    </div>
+      function formatBytes(bytes) {
+        if (bytes == null || Number.isNaN(bytes)) return "—";
+        if (bytes === 0) return "0 B";
+        const units = ["B", "KB", "MB", "GB", "TB"];
+        const index = Math.min(
+          units.length - 1,
+          Math.floor(Math.log(bytes) / Math.log(1024)),
+        );
+        const value = bytes / Math.pow(1024, index);
+        return (
+          (value >= 100 ? value.toFixed(0) : value.toFixed(1)) +
+          " " +
+          units[index]
+        );
+      }
 
-    <div id="toast-container" class="toast-container"></div>
+      function formatRelativeTime(iso) {
+        if (!iso) return "Never";
+        const when = new Date(iso);
+        const ago = Math.max(
+          0,
+          Math.round((Date.now() - when.getTime()) / 1000),
+        );
+        if (ago < 60) return ago + "s ago";
+        if (ago < 3600) return Math.round(ago / 60) + "m ago";
+        if (ago < 86400) return Math.round(ago / 3600) + "h ago";
+        return Math.round(ago / 86400) + "d ago";
+      }
 
-    <script>
-        let lastStatusData = null;
-        let activeRestoreTarget = null;
+      function formatRunCard(run) {
+        if (!run)
+          return { value: "Never", sub: "No runs yet", tone: "default" };
+        const tone =
+          run.status === "error"
+            ? "error"
+            : run.status === "success"
+              ? "success"
+              : "default";
+        return {
+          value: formatRelativeTime(run.finishedAt || run.startedAt),
+          sub:
+            (run.status || "").toUpperCase() +
+            (run.trigger ? " · " + run.trigger : ""),
+          tone,
+        };
+      }
 
-        function showToast(message, kind) {
-            const container = document.getElementById('toast-container');
-            const toast = document.createElement('div');
-            toast.className = 'toast' + (kind === 'error' ? ' error' : '');
-            toast.textContent = message;
-            container.appendChild(toast);
-            setTimeout(() => toast.remove(), 3500);
-        }
+      function formatRestoreCard(restore) {
+        if (!restore)
+          return { value: "Never", sub: "No restores yet", tone: "default" };
+        const tone =
+          restore.status === "error"
+            ? "error"
+            : restore.status === "success"
+              ? "success"
+              : "default";
+        const parts = [(restore.status || "").toUpperCase()];
+        if (restore.mode) parts.push(restore.mode);
+        if (restore.target) parts.push(restore.target);
+        return {
+          value: formatRelativeTime(restore.finishedAt || restore.startedAt),
+          sub: parts.join(" · "),
+          tone,
+        };
+      }
 
-        async function triggerAction(url, body) {
-            try {
-                const res = await fetch(url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body)
-                });
-                if (res.ok) {
-                    showToast('Action triggered');
-                } else {
-                    const data = await res.json().catch(() => ({}));
-                    showToast('Error: ' + (data.error || 'Action failed'), 'error');
-                }
-            } catch (err) {
-                showToast('Network error', 'error');
-            }
-        }
+      function formatVerifyCard(verify) {
+        if (!verify)
+          return {
+            value: "Never",
+            sub: "No integrity checks yet",
+            tone: "default",
+          };
+        const summary = verify.summary || {};
+        const parts = [(verify.status || "").toUpperCase()];
+        if (verify.target) parts.push(verify.target);
+        const counts = [];
+        if (summary.ok) counts.push(summary.ok + " ok");
+        if (summary.corrupt) counts.push(summary.corrupt + " corrupt");
+        if (summary.noBaseline)
+          counts.push(summary.noBaseline + " no-baseline");
+        if (counts.length) parts.push(counts.join(", "));
+        let tone = "default";
+        if (verify.status === "failure" || verify.status === "error")
+          tone = "error";
+        else if (verify.status === "warnings") tone = "warning";
+        else if (verify.status === "success") tone = "success";
+        return {
+          value: formatRelativeTime(verify.finishedAt || verify.startedAt),
+          sub: parts.join(" · "),
+          tone,
+        };
+      }
 
-        function confirmWipeRestore(target) {
-            const msg = 'WIPE & RESTORE — ' + target.toUpperCase() + '\n\n'
-                      + 'This will DROP every collection in the "' + target + '" database, then replay the entire backup chain '
-                      + 'from the first full backup to the latest entry.\n\n'
-                      + 'All current data in this database will be lost. Backups themselves are not affected.\n\n'
-                      + 'Are you absolutely sure?';
-            if (confirm(msg)) {
-                triggerAction('/api/trigger/restore', { type: 'full', target });
-            }
-        }
+      function toneToCardClass(tone) {
+        if (tone === "success") return "teal";
+        if (tone === "warning") return "gold";
+        if (tone === "error") return "red";
+        return "blue";
+      }
 
-        function openRestoreModal(target) {
-            if (!lastStatusData) return showToast('No data available', 'error');
-            const db = lastStatusData.backups.find(b => b.type === target);
-            if (!db || !db.history.length) return showToast('No backup history for ' + target, 'error');
+      function toneToTextColor(tone) {
+        if (tone === "success") return "#157457";
+        if (tone === "warning") return "#8c6312";
+        if (tone === "error") return "#b33f28";
+        return "#446272";
+      }
 
-            activeRestoreTarget = target;
-            const select = document.getElementById('backup-select');
-            select.innerHTML = '';
+      function toneToTagColor(tone) {
+        if (tone === "success") return "success";
+        if (tone === "warning") return "warning";
+        if (tone === "error") return "error";
+        return "default";
+      }
 
-            db.history.forEach(h => {
-                const opt = document.createElement('option');
-                opt.value = h.id;
-                opt.textContent = new Date(h.id).toLocaleString() + (h.type === 'full' ? '  ·  Full' : '  ·  Incremental');
-                select.appendChild(opt);
+      function buildHistoryColumns() {
+        return [
+          {
+            title: "When",
+            dataIndex: "id",
+            key: "id",
+            render: (value) =>
+              React.createElement(
+                "span",
+                null,
+                new Date(value).toLocaleString(),
+              ),
+          },
+          {
+            title: "Type",
+            dataIndex: "type",
+            key: "type",
+            render: (value) =>
+              React.createElement(
+                Tag,
+                {
+                  color: value === "full" ? "cyan" : "default",
+                  bordered: false,
+                },
+                value,
+              ),
+          },
+          {
+            title: "Collections",
+            dataIndex: "collections",
+            key: "collections",
+          },
+          {
+            title: "Size",
+            dataIndex: "size",
+            key: "size",
+            render: (value) => formatBytes(value),
+          },
+        ];
+      }
+
+      function computeInFlightState(inFlight) {
+        if (!inFlight) return null;
+
+        const isRestore = inFlight.operation === "restore";
+        const isVerify = inFlight.operation === "verify";
+        const since = inFlight.startedAt ? new Date(inFlight.startedAt) : null;
+        const elapsed = since
+          ? Math.round((Date.now() - since.getTime()) / 1000)
+          : 0;
+        const elapsedText =
+          elapsed < 60
+            ? elapsed + "s"
+            : elapsed < 3600
+              ? Math.round(elapsed / 60) + "m " + (elapsed % 60) + "s"
+              : Math.round(elapsed / 3600) +
+                "h " +
+                Math.round((elapsed % 3600) / 60) +
+                "m";
+
+        const lines = [];
+        lines.push({ label: "Trigger", value: inFlight.trigger || "unknown" });
+        lines.push({
+          label: "Started",
+          value:
+            (since ? since.toLocaleTimeString() : "—") +
+            " (" +
+            elapsedText +
+            " ago)",
+        });
+        if (inFlight.pid)
+          lines.push({ label: "PID", value: String(inFlight.pid) });
+
+        let progress = 0;
+        let title = "Backup in progress";
+        let type = "info";
+
+        if (isVerify) {
+          title = "Integrity verification in progress";
+          type = "warning";
+          if (inFlight.target)
+            lines.push({ label: "Target", value: inFlight.target });
+          if (inFlight.currentDb && inFlight.currentEntry) {
+            lines.push({
+              label: "Currently",
+              value:
+                inFlight.currentDb +
+                " / " +
+                new Date(inFlight.currentEntry).toLocaleString(),
             });
-
-            document.getElementById('restore-modal').style.display = 'flex';
-        }
-
-        function closeRestoreModal() {
-            document.getElementById('restore-modal').style.display = 'none';
-            activeRestoreTarget = null;
-        }
-
-        function triggerRestoreFromModal() {
-            const select = document.getElementById('backup-select');
-            const sinceId = select.value;
-            if (!sinceId || !activeRestoreTarget) return;
-            triggerAction('/api/trigger/restore', { type: 'incremental', sinceId, target: activeRestoreTarget });
-            closeRestoreModal();
-        }
-
-        function formatBytes(bytes) {
-            if (bytes == null || isNaN(bytes)) return '—';
-            if (bytes === 0) return '0 B';
-            const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-            const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
-            const v = bytes / Math.pow(1024, i);
-            return (v >= 100 ? v.toFixed(0) : v.toFixed(1)) + ' ' + units[i];
-        }
-
-        function formatRunCard(run) {
-            if (!run) return { value: 'Never', sub: 'No runs yet', color: 'var(--text-2)' };
-            const when = new Date(run.finishedAt || run.startedAt);
-            const ago = Math.round((Date.now() - when.getTime()) / 1000);
-            let agoStr;
-            if (ago < 60) agoStr = ago + 's ago';
-            else if (ago < 3600) agoStr = Math.round(ago / 60) + 'm ago';
-            else if (ago < 86400) agoStr = Math.round(ago / 3600) + 'h ago';
-            else agoStr = Math.round(ago / 86400) + 'd ago';
-
-            const color = run.status === 'error' ? 'var(--error)'
-                        : run.status === 'success' ? 'var(--success)'
-                        : 'var(--text-2)';
-            const sub = (run.status || '').toUpperCase() + (run.trigger ? ' · ' + run.trigger : '');
-            return { value: agoStr, sub, color };
-        }
-
-        function updateInFlight(data) {
-            const banner = document.getElementById('inflight');
-            if (!data.inFlight) {
-                banner.classList.remove('active');
-                return;
-            }
-            banner.classList.add('active');
-            const f = data.inFlight;
-            const since = f.startedAt ? new Date(f.startedAt) : null;
-            const elapsed = since ? Math.round((Date.now() - since.getTime()) / 1000) : 0;
-            const elapsedStr = elapsed < 60 ? elapsed + 's'
-                            : elapsed < 3600 ? Math.round(elapsed / 60) + 'm ' + (elapsed % 60) + 's'
-                            : Math.round(elapsed / 3600) + 'h ' + Math.round((elapsed % 3600) / 60) + 'm';
-
-            const parts = [];
-            parts.push('Trigger: <strong>' + (f.trigger || 'unknown') + '</strong>');
-            parts.push('Started: ' + (since ? since.toLocaleTimeString() : '—') + ' (' + elapsedStr + ' ago)');
-            if (f.pid) parts.push('PID ' + f.pid);
-            if (f.currentDb && f.currentCollection) {
-                parts.push('Working on: <strong>' + f.currentDb + ' / ' + f.currentCollection + '</strong>');
-            }
-            if (typeof f.processedCollections === 'number' && typeof f.totalCollections === 'number') {
-                parts.push((f.processedCollections + 1) + ' / ' + f.totalCollections + ' collections');
-            }
-            document.getElementById('inflight-meta').innerHTML = parts.join(' · ');
-
-            const pct = (f.totalCollections && f.totalCollections > 0)
-                ? Math.min(100, Math.round((f.processedCollections / f.totalCollections) * 100))
-                : 0;
-            document.getElementById('inflight-progress').style.width = pct + '%';
-        }
-
-        function updateUI(data) {
-            lastStatusData = data;
-
-            // Schedule + scheduler badge
-            document.getElementById('cron-val').textContent = data.scheduler.cron;
-            const statusBadge = document.getElementById('scheduler-status');
-            statusBadge.textContent = data.scheduler.running ? 'Active' : 'Stopped';
-            statusBadge.className = 'status-badge ' + (data.inFlight ? 'running' : '');
-
-            // Last Scheduled / Manual cards
-            const sched = formatRunCard(data.runs?.scheduled);
-            document.getElementById('last-scheduled-val').textContent = sched.value;
-            const ssub = document.getElementById('last-scheduled-sub');
-            ssub.textContent = sched.sub;
-            ssub.style.color = sched.color;
-
-            const man = formatRunCard(data.runs?.manual);
-            document.getElementById('last-manual-val').textContent = man.value;
-            const msub = document.getElementById('last-manual-sub');
-            msub.textContent = man.sub;
-            msub.style.color = man.color;
-
-            // Total disk usage
-            const totalDisk = data.backups.reduce((s, db) => s + (db.totalSize || 0), 0);
-            const totalCount = data.backups.reduce((s, db) => s + (db.count || 0), 0);
-            document.getElementById('total-disk-val').textContent = formatBytes(totalDisk);
-            document.getElementById('total-disk-sub').textContent = totalCount + ' backups across ' + data.backups.length + ' database' + (data.backups.length === 1 ? '' : 's');
-
-            updateInFlight(data);
-
-            // DB cards
-            const dbContainer = document.getElementById('database-cards');
-            dbContainer.innerHTML = '';
-            data.backups.forEach(db => {
-                const card = document.createElement('div');
-                card.className = 'db-card';
-                const lastDate = db.lastBackup ? new Date(db.lastBackup) : null;
-                const lastWhen = lastDate
-                    ? lastDate.toLocaleDateString() + ' · ' + lastDate.toLocaleTimeString()
-                    : 'Never';
-
-                let historyHtml;
-                if (!db.history || !db.history.length) {
-                    historyHtml = '<div class="history-empty">No backups yet.</div>';
-                } else {
-                    const rows = db.history.slice(0, 50).map(h => {
-                        const date = new Date(h.id);
-                        const pillClass = h.type === 'full' ? 'full' : 'incremental';
-                        return '<tr>'
-                             + '<td>' + date.toLocaleString() + '</td>'
-                             + '<td><span class="pill ' + pillClass + '">' + h.type + '</span></td>'
-                             + '<td>' + h.collections + '</td>'
-                             + '<td>' + formatBytes(h.size) + '</td>'
-                             + '</tr>';
-                    }).join('');
-                    historyHtml = '<table class="history-table">'
-                                + '<thead><tr><th>When</th><th>Type</th><th>Collections</th><th>Size</th></tr></thead>'
-                                + '<tbody>' + rows + '</tbody></table>';
-                    if (db.history.length > 50) {
-                        historyHtml += '<div class="history-empty">Showing latest 50 of ' + db.history.length + '.</div>';
-                    }
-                }
-
-                card.innerHTML = `
-                    <div class="db-head">
-                        <div>
-                            <span class="db-name">${db.name}</span>
-                            <span class="db-type">${db.type}</span>
-                            <div class="db-meta">Last backup: ${lastWhen}</div>
-                        </div>
-                        <div class="db-stats">
-                            <strong>${db.count}</strong> backup${db.count === 1 ? '' : 's'}
-                            <div>${formatBytes(db.totalSize)} on disk</div>
-                        </div>
-                    </div>
-
-                    <div class="actions-row">
-                        <button onclick="triggerAction('/api/trigger/backup', {type: 'incremental', target: '${db.type}'})" class="btn btn-secondary">Incremental Backup</button>
-                        <button onclick="triggerAction('/api/trigger/backup', {type: 'full', target: '${db.type}'})" class="btn btn-primary">Full Backup</button>
-                        <button onclick="openRestoreModal('${db.type}')" class="btn btn-secondary">Restore from Point</button>
-                        <button onclick="confirmWipeRestore('${db.type}')" class="btn btn-danger">Wipe & Restore</button>
-                    </div>
-
-                    <dl class="help-list">
-                        <div class="item"><dt>Incremental Backup</dt> <dd>— Captures only documents changed since the last backup, plus tracks any deletions. Fast and storage-light. Adds one entry to the chain.</dd></div>
-                        <div class="item"><dt>Full Backup</dt> <dd>— Re-dumps every document in this database from scratch. Slow and storage-heavy, but creates a clean checkpoint that future incrementals build on.</dd></div>
-                        <div class="item"><dt>Restore from Point</dt> <dd>— Replays the backup chain starting at a chosen entry. Existing data stays in place; modified or deleted documents from the chain are corrected. Use to roll forward from a known-good state without dropping data.</dd></div>
-                        <div class="item"><span class="danger-tag">Destructive</span><dt>Wipe & Restore</dt> <dd>— Drops every collection in this database, then replays the entire chain from the first full backup. Use only when you need to fully recover the database from backup.</dd></div>
-                    </dl>
-
-                    <details class="history">
-                        <summary>Backup history (${db.count})</summary>
-                        ${historyHtml}
-                    </details>
-                `;
-                dbContainer.appendChild(card);
+          }
+          if (
+            typeof inFlight.processedEntries === "number" &&
+            typeof inFlight.totalEntries === "number" &&
+            inFlight.totalEntries > 0
+          ) {
+            lines.push({
+              label: "Progress",
+              value:
+                inFlight.processedEntries +
+                1 +
+                " / " +
+                inFlight.totalEntries +
+                " entries",
             });
+            progress = Math.min(
+              100,
+              Math.round(
+                (inFlight.processedEntries / inFlight.totalEntries) * 100,
+              ),
+            );
+          }
+        } else if (isRestore) {
+          title = "Restore in progress";
+          type = "warning";
+          if (inFlight.target)
+            lines.push({ label: "Target", value: inFlight.target });
+          if (inFlight.mode)
+            lines.push({ label: "Mode", value: inFlight.mode });
+          if (inFlight.phase)
+            lines.push({ label: "Phase", value: inFlight.phase });
+          if (inFlight.currentDb && inFlight.currentEntry) {
+            lines.push({
+              label: "Replaying",
+              value:
+                inFlight.currentDb +
+                " / " +
+                new Date(inFlight.currentEntry).toLocaleString() +
+                (inFlight.currentEntryType
+                  ? " (" + inFlight.currentEntryType + ")"
+                  : ""),
+            });
+          }
+          if (
+            typeof inFlight.processedSteps === "number" &&
+            typeof inFlight.totalSteps === "number" &&
+            inFlight.totalSteps > 0
+          ) {
+            lines.push({
+              label: "Progress",
+              value:
+                inFlight.processedSteps +
+                (inFlight.phase === "done" ? 0 : 1) +
+                " / " +
+                inFlight.totalSteps +
+                " steps",
+            });
+            progress = Math.min(
+              100,
+              Math.round((inFlight.processedSteps / inFlight.totalSteps) * 100),
+            );
+          }
+        } else {
+          if (inFlight.currentDb && inFlight.currentCollection) {
+            lines.push({
+              label: "Currently",
+              value: inFlight.currentDb + " / " + inFlight.currentCollection,
+            });
+          }
+          if (
+            typeof inFlight.processedCollections === "number" &&
+            typeof inFlight.totalCollections === "number" &&
+            inFlight.totalCollections > 0
+          ) {
+            lines.push({
+              label: "Progress",
+              value:
+                inFlight.processedCollections +
+                1 +
+                " / " +
+                inFlight.totalCollections +
+                " collections",
+            });
+            progress = Math.min(
+              100,
+              Math.round(
+                (inFlight.processedCollections / inFlight.totalCollections) *
+                  100,
+              ),
+            );
+          }
         }
 
-        async function poll() {
-            try {
-                const res = await fetch('/api/status');
-                const data = await res.json();
-                updateUI(data);
-            } catch (err) {}
+        return { title, type, lines, progress };
+      }
+
+      function Dashboard() {
+        const [statusData, setStatusData] = useState(null);
+        const [restoreModalOpen, setRestoreModalOpen] = useState(false);
+        const [restoreTarget, setRestoreTarget] = useState(null);
+        const [restoreBackupId, setRestoreBackupId] = useState(null);
+        const [openHistoryFor, setOpenHistoryFor] = useState({});
+        const completionRef = useRef({
+          firstSeen: false,
+          scheduled: null,
+          manual: null,
+          restore: null,
+          verify: null,
+        });
+
+        const pollStatus = async () => {
+          const res = await fetch("/api/status");
+          const data = await res.json();
+          setStatusData((prev) => {
+            detectCompletions(data, completionRef.current);
+            return data;
+          });
+        };
+
+        useEffect(() => {
+          pollStatus().catch(() => {});
+          const id = setInterval(() => pollStatus().catch(() => {}), 3000);
+          return () => clearInterval(id);
+        }, []);
+
+        const detectCompletions = (data, state) => {
+          const scheduled = data.runs?.scheduled?.finishedAt ?? null;
+          const manual = data.runs?.manual?.finishedAt ?? null;
+          const restore = data.lastRestore?.finishedAt ?? null;
+          const verify = data.lastVerify?.finishedAt ?? null;
+
+          if (state.firstSeen) {
+            if (scheduled !== state.scheduled && data.runs?.scheduled)
+              notifyCompletion("Scheduled backup", data.runs.scheduled);
+            if (manual !== state.manual && data.runs?.manual)
+              notifyCompletion("Manual backup", data.runs.manual);
+            if (restore !== state.restore && data.lastRestore)
+              notifyCompletion("Restore", data.lastRestore);
+            if (verify !== state.verify && data.lastVerify)
+              notifyCompletion("Verify", data.lastVerify);
+          }
+          state.firstSeen = true;
+          state.scheduled = scheduled;
+          state.manual = manual;
+          state.restore = restore;
+          state.verify = verify;
+        };
+
+        const notifyCompletion = (label, info) => {
+          if (info.status === "success") {
+            antd.message.success(label + " completed successfully");
+          } else if (info.status === "warnings") {
+            antd.message.warning(
+              label +
+                " completed with warnings (legacy entries without checksums)",
+            );
+          } else if (info.status === "failure") {
+            const summary = info.summary || {};
+            antd.message.error(
+              label +
+                " found corruption: " +
+                (summary.corrupt || 0) +
+                " entries, " +
+                (summary.manifestErrors || 0) +
+                " manifest errors",
+            );
+          } else if (info.status === "error") {
+            antd.message.error(
+              label + " failed: " + (info.error || "unknown error"),
+            );
+          }
+        };
+
+        const triggerAction = async (
+          url,
+          body,
+          successText = "Action triggered",
+        ) => {
+          try {
+            const res = await fetch(url, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+            });
+            if (res.ok) {
+              antd.message.success(successText);
+              pollStatus().catch(() => {});
+            } else {
+              const data = await res.json().catch(() => ({}));
+              antd.message.error(data.error || "Action failed");
+            }
+          } catch {
+            antd.message.error("Network error");
+          }
+        };
+
+        const confirmLatestRestore = (target) => {
+          Modal.confirm({
+            title: "Restore to Latest",
+            content:
+              'This drops every collection in "' +
+              target +
+              '" and replays the chain up to the newest backup. Current live data in that database will be lost.',
+            okText: "Start Restore",
+            okButtonProps: { danger: true },
+            cancelText: "Cancel",
+            onOk: () =>
+              triggerAction(
+                "/api/trigger/restore",
+                { type: "full", target },
+                "Restore triggered",
+              ),
+          });
+        };
+
+        const openRestoreModalFor = (target) => {
+          if (!statusData) return antd.message.error("No data available");
+          const db = statusData.backups.find((entry) => entry.type === target);
+          if (!db || !db.history.length)
+            return antd.message.error("No backup history for " + target);
+          setRestoreTarget(target);
+          setRestoreBackupId(db.history[0].id);
+          setRestoreModalOpen(true);
+        };
+
+        const confirmRestorePoint = () => {
+          if (!restoreTarget || !restoreBackupId) return;
+          const when = new Date(restoreBackupId).toLocaleString();
+          Modal.confirm({
+            title: "Restore to Point in Time",
+            content:
+              'This drops every collection in "' +
+              restoreTarget +
+              '" and restores the exact state captured at ' +
+              when +
+              ". Data written after that point will be lost.",
+            okText: "Start Restore",
+            okButtonProps: { danger: true },
+            cancelText: "Cancel",
+            onOk: async () => {
+              setRestoreModalOpen(false);
+              await triggerAction(
+                "/api/trigger/restore",
+                {
+                  type: "full",
+                  target: restoreTarget,
+                  backupId: restoreBackupId,
+                },
+                "Point-in-time restore triggered",
+              );
+            },
+          });
+        };
+
+        const totalDisk = useMemo(() => {
+          if (!statusData) return 0;
+          return statusData.backups.reduce(
+            (sum, db) => sum + (db.totalSize || 0),
+            0,
+          );
+        }, [statusData]);
+
+        const totalCount = useMemo(() => {
+          if (!statusData) return 0;
+          return statusData.backups.reduce(
+            (sum, db) => sum + (db.count || 0),
+            0,
+          );
+        }, [statusData]);
+
+        const overviewCards = useMemo(() => {
+          if (!statusData) return [];
+          return [
+            {
+              key: "schedule",
+              title: "Schedule",
+              value: statusData.scheduler.cron,
+              sub: "Cron expression driving scheduled backup runs.",
+              tone: "blue",
+            },
+            {
+              key: "scheduled",
+              title: "Last Scheduled Run",
+              ...formatRunCard(statusData.runs?.scheduled),
+            },
+            {
+              key: "manual",
+              title: "Last Manual Run",
+              ...formatRunCard(statusData.runs?.manual),
+            },
+            {
+              key: "restore",
+              title: "Last Restore",
+              ...formatRestoreCard(statusData.lastRestore),
+            },
+            {
+              key: "verify",
+              title: "Last Verify",
+              ...formatVerifyCard(statusData.lastVerify),
+            },
+            {
+              key: "disk",
+              title: "Total Disk Usage",
+              value: formatBytes(totalDisk),
+              sub:
+                totalCount +
+                " backups across " +
+                statusData.backups.length +
+                " database" +
+                (statusData.backups.length === 1 ? "" : "s") +
+                ".",
+              tone: "teal",
+            },
+          ];
+        }, [statusData, totalDisk, totalCount]);
+
+        const inFlightView = computeInFlightState(statusData?.inFlight);
+        const historyColumns = useMemo(() => buildHistoryColumns(), []);
+
+        const renderHero = () =>
+          React.createElement(
+            Card,
+            { className: "hero-card", bordered: false },
+            React.createElement(
+              "div",
+              { className: "hero-topbar" },
+              React.createElement(
+                "div",
+                { className: "hero-kicker" },
+                "CrashSafe Control Surface",
+              ),
+              React.createElement(
+                Tag,
+                {
+                  color: statusData?.scheduler?.running ? "success" : "default",
+                  bordered: false,
+                  style: {
+                    paddingInline: 14,
+                    paddingBlock: 8,
+                    borderRadius: 999,
+                    fontWeight: 800,
+                    letterSpacing: "0.12em",
+                    textTransform: "uppercase",
+                  },
+                },
+                statusData?.scheduler?.running
+                  ? "Scheduler Active"
+                  : "Scheduler Stopped",
+              ),
+            ),
+            React.createElement(
+              "div",
+              { className: "hero-grid" },
+              React.createElement(
+                "div",
+                { className: "hero-copy" },
+                React.createElement("h1", null, "CrashSafe"),
+              ),
+              React.createElement(
+                "div",
+                { className: "hero-rail" },
+                React.createElement(
+                  "div",
+                  { className: "hero-rail-card" },
+                  React.createElement(
+                    "div",
+                    { className: "eyebrow" },
+                    "Runtime",
+                  ),
+                  React.createElement(
+                    "div",
+                    { className: "value" },
+                    statusData?.inFlight
+                      ? "Operation in progress"
+                      : "System idle",
+                  ),
+                  React.createElement(
+                    "div",
+                    { className: "hint" },
+                    statusData?.inFlight
+                      ? "A running task is currently visible below with live progress."
+                      : "No backup, restore or verify operation is active right now.",
+                  ),
+                ),
+                React.createElement(
+                  "div",
+                  { className: "hero-rail-card" },
+                  React.createElement(
+                    "div",
+                    { className: "eyebrow" },
+                    "Storage",
+                  ),
+                  React.createElement(
+                    "div",
+                    { className: "value" },
+                    formatBytes(totalDisk),
+                  ),
+                  React.createElement(
+                    "div",
+                    { className: "hint" },
+                    totalCount +
+                      " retained backup entries across all configured databases.",
+                  ),
+                ),
+              ),
+            ),
+          );
+
+        const renderInFlight = () => {
+          if (!inFlightView) return null;
+          return React.createElement(
+            Card,
+            { className: "surface-card section-block", bordered: false },
+            React.createElement(Alert, {
+              type: inFlightView.type,
+              showIcon: true,
+              banner: true,
+              message: React.createElement(
+                Text,
+                { strong: true },
+                inFlightView.title,
+              ),
+              description: React.createElement(
+                "div",
+                null,
+                React.createElement(
+                  "div",
+                  { className: "overlay-meta" },
+                  inFlightView.lines.map((line) =>
+                    React.createElement(
+                      "div",
+                      { className: "overlay-meta-line", key: line.label },
+                      React.createElement("strong", null, line.label + ": "),
+                      line.value,
+                    ),
+                  ),
+                ),
+                React.createElement(Progress, {
+                  percent: inFlightView.progress,
+                  showInfo: false,
+                  strokeColor:
+                    inFlightView.type === "warning" ? "#d9a11e" : "#1f9d77",
+                  trailColor: "rgba(16, 33, 43, 0.08)",
+                  size: "small",
+                  style: { marginTop: 16 },
+                }),
+              ),
+            }),
+          );
+        };
+
+        const renderMetrics = () =>
+          React.createElement(
+            "div",
+            { className: "section-block" },
+            React.createElement(
+              "div",
+              { className: "section-head" },
+              React.createElement(
+                "div",
+                { className: "section-label" },
+                "Overview",
+              ),
+            ),
+            React.createElement(
+              "div",
+              { className: "stats-grid" },
+              overviewCards.map((card) =>
+                React.createElement(
+                  Card,
+                  {
+                    key: card.key,
+                    bordered: false,
+                    className:
+                      "metric-card " + toneToCardClass(card.tone || "blue"),
+                  },
+                  React.createElement(Statistic, {
+                    title: card.title,
+                    value: card.value,
+                    valueStyle: { color: "#10212b" },
+                  }),
+                  React.createElement(
+                    "div",
+                    {
+                      className: "metric-sub",
+                      style: { color: toneToTextColor(card.tone || "default") },
+                    },
+                    card.sub,
+                  ),
+                ),
+              ),
+            ),
+          );
+
+        const renderDatabaseCard = (db) => {
+          const lastDate = db.lastBackup
+            ? new Date(db.lastBackup).toLocaleString()
+            : "Never";
+          const historyData = (db.history || [])
+            .slice(0, 50)
+            .map((entry) => ({ ...entry, key: entry.id }));
+          const dbConfig = statusData?.config || {};
+          const configName =
+            db.type === "data" ? dbConfig.dbData : dbConfig.dbParse;
+          const tagColor = db.type === "data" ? "green" : "blue";
+          const isOpen = !!openHistoryFor[db.type];
+
+          return React.createElement(
+            Card,
+            { key: db.type, bordered: false, className: "db-card" },
+            React.createElement(
+              "div",
+              { className: "db-header" },
+              React.createElement(
+                "div",
+                null,
+                React.createElement(
+                  "div",
+                  { className: "db-title" },
+                  React.createElement(
+                    "div",
+                    { className: "db-name" },
+                    configName || db.name,
+                  ),
+                  React.createElement(
+                    Tag,
+                    { color: tagColor, bordered: false },
+                    db.type,
+                  ),
+                ),
+                React.createElement(
+                  "div",
+                  { className: "db-meta" },
+                  "Last backup: ",
+                  React.createElement("span", { className: "mono" }, lastDate),
+                  React.createElement("br"),
+                  "Stored on disk: ",
+                  React.createElement(
+                    "span",
+                    { className: "mono" },
+                    formatBytes(db.totalSize),
+                  ),
+                ),
+              ),
+              React.createElement(
+                "div",
+                { className: "db-count" },
+                React.createElement("div", { className: "big" }, db.count),
+                React.createElement(
+                  "div",
+                  { className: "small" },
+                  "backup" + (db.count === 1 ? "" : "s") + " retained",
+                ),
+              ),
+            ),
+            React.createElement(
+              "div",
+              { className: "action-grid" },
+              React.createElement(
+                Button,
+                {
+                  onClick: () =>
+                    triggerAction(
+                      "/api/trigger/backup",
+                      { type: "incremental", target: db.type },
+                      "Incremental backup triggered",
+                    ),
+                },
+                "Incremental Backup",
+              ),
+              React.createElement(
+                Button,
+                {
+                  type: "primary",
+                  onClick: () =>
+                    triggerAction(
+                      "/api/trigger/backup",
+                      { type: "full", target: db.type },
+                      "Full backup triggered",
+                    ),
+                },
+                "Full Backup",
+              ),
+              React.createElement(
+                Button,
+                {
+                  onClick: () =>
+                    triggerAction(
+                      "/api/trigger/verify",
+                      { target: db.type },
+                      "Integrity verification triggered",
+                    ),
+                },
+                "Verify Integrity",
+              ),
+              React.createElement(
+                Button,
+                { danger: true, onClick: () => openRestoreModalFor(db.type) },
+                "Restore to Point",
+              ),
+              React.createElement(
+                Button,
+                {
+                  danger: true,
+                  ghost: true,
+                  style: { gridColumn: "1 / -1" },
+                  onClick: () => confirmLatestRestore(db.type),
+                },
+                "Restore to Latest",
+              ),
+            ),
+            React.createElement(
+              "div",
+              { className: "db-help" },
+              React.createElement(List, {
+                size: "small",
+                split: true,
+                dataSource: [
+                  {
+                    key: "inc",
+                    title: "Incremental Backup",
+                    tag: React.createElement(
+                      Tag,
+                      { color: "default", bordered: false },
+                      "Delta",
+                    ),
+                    copy: "Dumps only documents changed since the previous entry and tracks deletes. Faster, smaller, chain-based.",
+                  },
+                  {
+                    key: "full",
+                    title: "Full Backup",
+                    tag: React.createElement(
+                      Tag,
+                      { color: "green", bordered: false },
+                      "Checkpoint",
+                    ),
+                    copy: "Re-dumps everything and creates a fresh restore checkpoint. Slower, but cleaner as a recovery anchor.",
+                  },
+                  {
+                    key: "restore",
+                    title: "Restore",
+                    tag: React.createElement(
+                      Tag,
+                      { color: "red", bordered: false },
+                      "Destructive",
+                    ),
+                    copy: "Drops the live database and rebuilds it from the chosen chain segment. Backup files on disk remain untouched.",
+                  },
+                ],
+                renderItem: (item) =>
+                  React.createElement(
+                    List.Item,
+                    { key: item.key },
+                    React.createElement(
+                      "div",
+                      null,
+                      React.createElement(
+                        "div",
+                        { className: "item-title" },
+                        item.title,
+                        item.tag,
+                      ),
+                      React.createElement(
+                        "div",
+                        { className: "item-copy" },
+                        item.copy,
+                      ),
+                    ),
+                  ),
+              }),
+            ),
+            React.createElement(
+              "div",
+              { className: "chain-note" },
+              React.createElement("strong", null, "Restore chain semantics"),
+              React.createElement(
+                "span",
+                null,
+                "A restore only replays from the most recent full backup at or before the target entry through the target itself. Older full chains are ignored.",
+              ),
+            ),
+            React.createElement(
+              Card,
+              { className: "history-card", bordered: false },
+              React.createElement(
+                "div",
+                { className: "history-title" },
+                React.createElement("span", null, "Backup History"),
+                React.createElement(
+                  Button,
+                  {
+                    type: "text",
+                    size: "small",
+                    onClick: () =>
+                      setOpenHistoryFor((prev) => ({
+                        ...prev,
+                        [db.type]: !prev[db.type],
+                      })),
+                  },
+                  isOpen ? "Hide" : "Show",
+                ),
+              ),
+              isOpen
+                ? historyData.length
+                  ? React.createElement(Table, {
+                      className: "custom-table",
+                      columns: historyColumns,
+                      dataSource: historyData,
+                      pagination: false,
+                      size: "small",
+                      scroll: { x: true },
+                    })
+                  : React.createElement(
+                      "div",
+                      { className: "empty-hint" },
+                      "No backups yet.",
+                    )
+                : React.createElement(
+                    "div",
+                    { className: "empty-hint" },
+                    db.count +
+                      " entr" +
+                      (db.count === 1 ? "y" : "ies") +
+                      " available.",
+                  ),
+            ),
+          );
+        };
+
+        if (!statusData) {
+          return React.createElement(
+            "div",
+            { className: "app-shell" },
+            React.createElement(
+              "div",
+              { className: "page-wrap" },
+              React.createElement(Card, {
+                className: "hero-card",
+                bordered: false,
+                loading: true,
+              }),
+            ),
+          );
         }
 
-        setInterval(poll, 3000);
-        poll();
+        const restoreOptions = (
+          statusData.backups.find((entry) => entry.type === restoreTarget)
+            ?.history || []
+        ).map((entry) => ({
+          value: entry.id,
+          label:
+            new Date(entry.id).toLocaleString() +
+            (entry.type === "full" ? " · Full" : " · Incremental"),
+        }));
+
+        return React.createElement(
+          "div",
+          { className: "app-shell" },
+          React.createElement(
+            "div",
+            { className: "page-wrap" },
+            renderHero(),
+            renderInFlight(),
+            renderMetrics(),
+            React.createElement(
+              "div",
+              { className: "section-block" },
+              React.createElement(
+                "div",
+                { className: "section-head" },
+                React.createElement(
+                  "div",
+                  { className: "section-label" },
+                  "Databases",
+                ),
+              ),
+              React.createElement(
+                "div",
+                { className: "db-grid" },
+                statusData.backups.map(renderDatabaseCard),
+              ),
+            ),
+            React.createElement(
+              "div",
+              { className: "footer-note" },
+              "Live status continues to poll every 3 seconds. API endpoints and backend behavior are unchanged.",
+            ),
+          ),
+          React.createElement(
+            Modal,
+            {
+              title: "Restore to a point in time",
+              open: restoreModalOpen,
+              okText: "Continue",
+              cancelText: "Cancel",
+              okButtonProps: { danger: true, disabled: !restoreBackupId },
+              onOk: confirmRestorePoint,
+              onCancel: () => setRestoreModalOpen(false),
+            },
+            React.createElement(
+              Paragraph,
+              {
+                style: { color: "#5e7381", lineHeight: 1.7, marginBottom: 18 },
+              },
+              "This action drops every collection in the selected database and restores the exact state stored at the chosen backup entry.",
+            ),
+            React.createElement(
+              "label",
+              { className: "restore-select-label" },
+              "Backup entry",
+            ),
+            React.createElement(Select, {
+              value: restoreBackupId,
+              options: restoreOptions,
+              style: { width: "100%" },
+              onChange: setRestoreBackupId,
+              placeholder: "Choose a backup entry",
+            }),
+          ),
+        );
+      }
+
+      const crashsafeTheme = {
+        algorithm: theme.defaultAlgorithm,
+        token: {
+          colorPrimary: "#1f9d77",
+          colorInfo: "#2f8fc7",
+          colorSuccess: "#1f9d77",
+          colorWarning: "#d6a321",
+          colorError: "#d45b44",
+          borderRadius: 20,
+          fontFamily: "Plus Jakarta Sans, sans-serif",
+          colorText: "#10212b",
+          colorTextSecondary: "#6f8391",
+          colorBgLayout: "transparent",
+          colorBgContainer: "rgba(255,255,255,0.84)",
+          colorBorderSecondary: "rgba(16, 33, 43, 0.08)",
+          boxShadowSecondary: "0 24px 80px rgba(16, 33, 43, 0.08)",
+        },
+        components: {
+          Card: {
+            bodyPadding: 20,
+          },
+          Button: {
+            fontWeight: 700,
+            primaryShadow: "0 12px 30px rgba(31, 157, 119, 0.22)",
+          },
+          Table: {
+            headerBg: "transparent",
+            rowHoverBg: "rgba(31, 157, 119, 0.04)",
+          },
+          Modal: {
+            contentBg: "#ffffff",
+            headerBg: "#ffffff",
+          },
+          Alert: {
+            borderRadiusLG: 20,
+          },
+          Tag: {
+            fontWeight: 700,
+          },
+        },
+      };
+
+      ReactDOM.createRoot(document.getElementById("root")).render(
+        React.createElement(
+          ConfigProvider,
+          { theme: crashsafeTheme },
+          React.createElement(AntdApp, null, React.createElement(Dashboard)),
+        ),
+      );
     </script>
-</body>
+  </body>
 </html>

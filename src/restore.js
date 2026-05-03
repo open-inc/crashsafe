@@ -5,8 +5,18 @@ const { execFile } = require('node:child_process');
 const { BSON: { EJSON } } = require('mongodb');
 const { getDb, disconnect } = require('./db');
 const { findEntry, getChainUpTo, getChainFrom } = require('./manifest');
+const { tryAcquireLock, releaseLock, updateLockProgress } = require('./locking');
 const config = require('./config');
 const logger = require('./logger');
+
+// In-process mutex + last-result tracking for restore. Mirrors the structure
+// in backup.js so the dashboard can render a "Last Restore" stat the same way.
+let inFlight = null;
+let lastRestore = null;
+
+function getRestoreStats() {
+    return lastRestore;
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -60,6 +70,18 @@ async function replayEntry(entry, dir, db) {
         if (fs.existsSync(trackingPath)) {
             const trackingData = EJSON.parse(fs.readFileSync(trackingPath, 'utf8'));
             for (const trackOp of trackingData) {
+                // Collection-level drop: drop the whole collection. NamespaceNotFound
+                // is tolerated because the collection may not exist yet at this point
+                // in a PITR replay (e.g. it was dropped before being recreated).
+                if (trackOp.op === 'drop') {
+                    try {
+                        await db.collection(trackOp.collection).drop();
+                        totalDeletes++;
+                    } catch (err) {
+                        if (err?.codeName !== 'NamespaceNotFound') throw err;
+                    }
+                    continue;
+                }
                 const coll = db.collection(trackOp.collection);
                 const toDelete = [];
                 if (trackOp.deletes?.length) toDelete.push(...trackOp.deletes);
@@ -106,8 +128,22 @@ async function restoreIncremental(dbType, dbName, backupId) {
     }
 
     logger.info({ dbType, dbName, backupId: entry.id }, 'Starting incremental restore');
+    updateLockProgress({
+        currentDb: dbType,
+        phase: 'replaying',
+        currentEntry: entry.id,
+        currentEntryType: entry.type,
+        processedSteps: 0,
+        totalSteps: 1,
+    });
     const db = await getDb(dbName);
     const stats = await replayEntry(entry, dir, db);
+    updateLockProgress({
+        currentDb: dbType,
+        phase: 'done',
+        processedSteps: 1,
+        totalSteps: 1,
+    });
 
     logger.info({ ...stats, backupId: entry.id }, 'Incremental restore complete');
     return stats;
@@ -139,6 +175,7 @@ async function restoreFull(dbType, dbName, backupId, dropExisting) {
 
     // Drop all existing collections only when explicitly requested
     if (dropExisting) {
+        updateLockProgress({ currentDb: dbType, phase: 'dropping', totalSteps: chain.length, processedSteps: 0 });
         const existing = await db.listCollections().toArray();
         for (const coll of existing) {
             await db.collection(coll.name).drop();
@@ -150,12 +187,23 @@ async function restoreFull(dbType, dbName, backupId, dropExisting) {
     let totalUpserts = 0;
     let totalDeletes = 0;
 
+    let step = 0;
     for (const entry of chain) {
+        updateLockProgress({
+            currentDb: dbType,
+            phase: 'replaying',
+            currentEntry: entry.id,
+            currentEntryType: entry.type,
+            processedSteps: step,
+            totalSteps: chain.length,
+        });
         logger.info({ backupId: entry.id, type: entry.type }, 'Replaying backup entry');
         const stats = await replayEntry(entry, dir, db);
         totalUpserts += stats.upserts;
         totalDeletes += stats.deletes;
+        step++;
     }
+    updateLockProgress({ currentDb: dbType, phase: 'done', processedSteps: chain.length, totalSteps: chain.length });
 
     logger.info({ upserts: totalUpserts, deletes: totalDeletes }, 'Full restore complete');
     return { upserts: totalUpserts, deletes: totalDeletes };
@@ -187,12 +235,23 @@ async function restoreSince(dbType, dbName, sinceId, toId) {
     let totalUpserts = 0;
     let totalDeletes = 0;
 
+    let step = 0;
     for (const entry of chain) {
+        updateLockProgress({
+            currentDb: dbType,
+            phase: 'replaying',
+            currentEntry: entry.id,
+            currentEntryType: entry.type,
+            processedSteps: step,
+            totalSteps: chain.length,
+        });
         logger.info({ backupId: entry.id, type: entry.type }, 'Replaying backup entry');
         const stats = await replayEntry(entry, dir, db);
         totalUpserts += stats.upserts;
         totalDeletes += stats.deletes;
+        step++;
     }
+    updateLockProgress({ currentDb: dbType, phase: 'done', processedSteps: chain.length, totalSteps: chain.length });
 
     logger.info({ upserts: totalUpserts, deletes: totalDeletes }, 'Since-restore complete');
     return { upserts: totalUpserts, deletes: totalDeletes };
@@ -209,7 +268,7 @@ async function restoreSince(dbType, dbName, sinceId, toId) {
  * @param {string|null}          sinceId   If set, replay chain from this ID without dropping
  * @param {boolean}              dropExisting  Drop collections before full restore
  */
-async function runRestore(target, backupId, full, sinceId, dropExisting) {
+async function runRestore(target, backupId, full, sinceId, dropExisting, trigger = 'unknown') {
     const targets = [];
     if ((target === 'data' || target === 'all') && config.dbData) {
         targets.push({ dbType: 'data', dbName: config.dbData });
@@ -221,15 +280,64 @@ async function runRestore(target, backupId, full, sinceId, dropExisting) {
         throw new Error(`No configured database found for target "${target}"`);
     }
 
-    for (const { dbType, dbName } of targets) {
-        if (sinceId) {
-            await restoreSince(dbType, dbName, sinceId, backupId ?? null);
-        } else if (full) {
-            await restoreFull(dbType, dbName, backupId, dropExisting);
-        } else {
-            await restoreIncremental(dbType, dbName, backupId);
-        }
+    if (inFlight) {
+        logger.warn({ trigger }, 'Restore skipped: another restore is already running in this process');
+        return { skipped: true, reason: 'in-process' };
     }
+
+    const acquired = tryAcquireLock('restore', trigger);
+    if (!acquired.ok) {
+        logger.warn({ trigger, holder: acquired.holder }, 'Restore skipped: another operation holds the lock');
+        return { skipped: true, reason: 'cross-process', holder: acquired.holder };
+    }
+
+    const startedAt = new Date().toISOString();
+    const mode = sinceId ? 'since' : (full ? 'full' : 'incremental');
+    updateLockProgress({ mode, target, backupId: backupId ?? null, sinceId: sinceId ?? null, dropExisting: !!dropExisting });
+
+    inFlight = (async () => {
+        try {
+            for (const { dbType, dbName } of targets) {
+                if (sinceId) {
+                    await restoreSince(dbType, dbName, sinceId, backupId ?? null);
+                } else if (full) {
+                    await restoreFull(dbType, dbName, backupId, dropExisting);
+                } else {
+                    await restoreIncremental(dbType, dbName, backupId);
+                }
+            }
+            lastRestore = {
+                trigger,
+                mode,
+                target,
+                backupId: backupId ?? null,
+                sinceId: sinceId ?? null,
+                dropExisting: !!dropExisting,
+                startedAt,
+                finishedAt: new Date().toISOString(),
+                status: 'success',
+            };
+        } catch (err) {
+            lastRestore = {
+                trigger,
+                mode,
+                target,
+                backupId: backupId ?? null,
+                sinceId: sinceId ?? null,
+                dropExisting: !!dropExisting,
+                startedAt,
+                finishedAt: new Date().toISOString(),
+                status: 'error',
+                error: err?.message ?? String(err),
+            };
+            throw err;
+        } finally {
+            releaseLock();
+            inFlight = null;
+        }
+    })();
+
+    return inFlight;
 }
 
-module.exports = { runRestore };
+module.exports = { runRestore, getRestoreStats };

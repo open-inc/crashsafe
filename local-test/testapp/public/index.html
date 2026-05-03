@@ -1,0 +1,1280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CrashSafe Test Harness</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg:           #0b111e;
+            --panel:        #111827;
+            --card:         #131c2e;
+            --border:       #1f2a40;
+            --border-soft:  #182236;
+            --text:         #e6e9ef;
+            --text-2:       #98a1b2;
+            --muted:        #5e6577;
+            --primary:      #2563eb;
+            --primary-hover:#1d4ed8;
+            --success:      #10b981;
+            --warning:      #f59e0b;
+            --error:        #ef4444;
+            --accent:       #6366f1;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Inter', -apple-system, system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            padding: 2rem 1.5rem 4rem;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .container { width: 100%; max-width: 1280px; margin: 0 auto; }
+        .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 1.5rem;
+            margin-bottom: 1.75rem;
+            border-bottom: 1px solid var(--border-soft);
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+        .brand { display: flex; align-items: baseline; gap: 0.6rem; }
+        .brand h1 { font-size: 1.25rem; font-weight: 700; letter-spacing: -0.01em; }
+        .brand .tag {
+            font-size: 0.72rem; color: var(--muted); font-weight: 600;
+            text-transform: uppercase; letter-spacing: 0.06em;
+        }
+
+        .header-actions { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+        .header-actions a { text-decoration: none; }
+
+        .status-badge {
+            padding: 0.3rem 0.75rem; border-radius: 6px;
+            font-size: 0.72rem; font-weight: 600;
+            display: inline-flex; align-items: center; gap: 0.5rem;
+            background: rgba(16, 185, 129, 0.1); color: var(--success);
+            border: 1px solid rgba(16, 185, 129, 0.25);
+            text-transform: uppercase; letter-spacing: 0.05em;
+        }
+        .status-badge.error {
+            background: rgba(239, 68, 68, 0.1); color: var(--error);
+            border-color: rgba(239, 68, 68, 0.3);
+        }
+        .status-badge::before {
+            content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor;
+        }
+
+        .section-title {
+            font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em;
+            color: var(--muted); font-weight: 600; margin: 1.75rem 0 0.85rem;
+        }
+
+        .stat-row {
+            display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem;
+            margin-bottom: 0.5rem;
+        }
+        @media (max-width: 700px) { .stat-row { grid-template-columns: 1fr; } }
+
+        .stat-card {
+            background: var(--card); border: 1px solid var(--border);
+            border-radius: 8px; padding: 1rem 1.25rem;
+        }
+        .stat-card .label {
+            font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em;
+            color: var(--muted); font-weight: 600; margin-bottom: 0.4rem;
+        }
+        .stat-card .value {
+            font-size: 1.4rem; font-weight: 600;
+            font-variant-numeric: tabular-nums; letter-spacing: -0.01em;
+        }
+        .stat-card .sub { font-size: 0.78rem; color: var(--text-2); margin-top: 0.3rem; }
+
+        .layout {
+            display: grid; grid-template-columns: 1fr 320px;
+            gap: 1.5rem; margin-top: 1rem;
+        }
+        @media (max-width: 1000px) { .layout { grid-template-columns: 1fr; } }
+
+        .quick-actions {
+            background: var(--card); border: 1px solid var(--border);
+            border-radius: 8px; padding: 1.25rem; margin-bottom: 1.5rem;
+        }
+        .quick-actions .row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+        .quick-actions h3 {
+            font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em;
+            color: var(--muted); margin-bottom: 0.75rem; font-weight: 600;
+        }
+        .quick-actions p { font-size: 0.82rem; color: var(--text-2); margin-bottom: 0.85rem; line-height: 1.5; }
+
+        .db-card {
+            background: var(--card); border: 1px solid var(--border);
+            border-radius: 8px; padding: 1.5rem; margin-bottom: 1rem;
+        }
+        .db-card .db-head {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 1rem; padding-bottom: 1rem; border-bottom: 1px solid var(--border-soft);
+            flex-wrap: wrap; gap: 0.5rem;
+        }
+        .db-card h2 { font-size: 1rem; font-weight: 600; }
+        .db-card .db-name { color: var(--text-2); font-size: 0.78rem; margin-left: 0.5rem; }
+
+        .new-coll-form {
+            display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1rem;
+            padding: 0.75rem 1rem; background: rgba(255,255,255,0.015);
+            border: 1px solid var(--border-soft); border-radius: 6px;
+        }
+        .new-coll-form label {
+            font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em;
+            color: var(--muted); font-weight: 600;
+        }
+        .new-coll-form input {
+            flex: 1; background: var(--bg); border: 1px solid var(--border);
+            color: var(--text); padding: 0.5rem 0.7rem; border-radius: 5px;
+            font-family: 'JetBrains Mono', ui-monospace, monospace;
+            font-size: 0.82rem; outline: none; min-width: 200px;
+        }
+        .new-coll-form input:focus { border-color: var(--primary); }
+
+        .coll-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+        .coll-table th, .coll-table td {
+            text-align: left; padding: 0.55rem 0.6rem;
+            border-bottom: 1px solid var(--border-soft);
+        }
+        .coll-table th {
+            font-weight: 600; color: var(--muted); font-size: 0.68rem;
+            text-transform: uppercase; letter-spacing: 0.06em;
+        }
+        .coll-table tr:last-child td { border-bottom: none; }
+        .coll-table .name { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 0.82rem; }
+        .coll-table .count {
+            font-variant-numeric: tabular-nums; color: var(--text);
+            font-weight: 600; white-space: nowrap;
+        }
+        .coll-table .actions {
+            display: flex; gap: 0.3rem; flex-wrap: wrap; justify-content: flex-end;
+        }
+
+        .pill {
+            display: inline-block; padding: 0.1rem 0.5rem; border-radius: 4px;
+            font-size: 0.65rem; font-weight: 600; text-transform: uppercase;
+            letter-spacing: 0.04em; margin-left: 0.4rem; vertical-align: middle;
+        }
+        .pill.backed-up { background: rgba(16, 185, 129, 0.12); color: #34d399; }
+        .pill.skipped   { background: rgba(245, 158, 11, 0.12); color: #fbbf24; }
+        .pill.config    { background: rgba(99, 102, 241, 0.12); color: #a5b4fc; }
+
+        .empty { color: var(--muted); font-size: 0.85rem; padding: 0.75rem 0; text-align: center; }
+
+        /* Buttons */
+        .btn {
+            padding: 0.45rem 0.8rem; border-radius: 5px; font-weight: 500;
+            font-size: 0.78rem; font-family: inherit;
+            cursor: pointer; transition: background 0.15s, border-color 0.15s, color 0.15s;
+            border: 1px solid transparent; outline: none;
+            display: inline-flex; align-items: center; justify-content: center; gap: 0.35rem;
+            white-space: nowrap;
+        }
+        .btn:focus-visible { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--primary); }
+        .btn-primary { background: var(--primary); color: white; }
+        .btn-primary:hover { background: var(--primary-hover); }
+        .btn-secondary {
+            background: transparent; color: var(--text); border-color: var(--border);
+        }
+        .btn-secondary:hover { background: var(--border-soft); border-color: #2a3754; }
+        .btn-danger {
+            background: transparent; color: var(--error); border-color: rgba(239, 68, 68, 0.3);
+        }
+        .btn-danger:hover { background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.5); }
+        .btn-success {
+            background: rgba(16, 185, 129, 0.1); color: var(--success);
+            border-color: rgba(16, 185, 129, 0.3);
+        }
+        .btn-success:hover { background: rgba(16, 185, 129, 0.18); }
+        .btn-sm { padding: 0.3rem 0.55rem; font-size: 0.72rem; }
+
+        /* Activity log */
+        aside.log {
+            background: var(--card); border: 1px solid var(--border);
+            border-radius: 8px; padding: 1.25rem;
+            position: sticky; top: 1rem; align-self: start;
+            max-height: calc(100vh - 3rem); overflow-y: auto;
+        }
+        aside.log h3 {
+            font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em;
+            color: var(--muted); font-weight: 600; margin-bottom: 0.75rem;
+        }
+        .log-entry {
+            font-size: 0.78rem; padding: 0.5rem 0.6rem; margin-bottom: 0.35rem;
+            background: rgba(255,255,255,0.02); border-radius: 5px;
+            border-left: 2px solid var(--border);
+            line-height: 1.45;
+        }
+        .log-entry.success { border-left-color: var(--success); }
+        .log-entry.error   { border-left-color: var(--error); }
+        .log-entry.info    { border-left-color: var(--accent); }
+        .log-entry .ts {
+            font-size: 0.7rem; color: var(--muted);
+            font-family: 'JetBrains Mono', ui-monospace, monospace;
+            margin-right: 0.5rem;
+        }
+        .log-empty { color: var(--muted); font-size: 0.8rem; text-align: center; padding: 1rem 0; }
+
+        /* Modal */
+        .modal-overlay {
+            position: fixed; inset: 0; background: rgba(11, 17, 30, 0.85);
+            display: none; justify-content: center; align-items: center;
+            z-index: 1000; padding: 1.5rem;
+        }
+        .modal {
+            background: var(--panel); border: 1px solid var(--border);
+            border-radius: 10px; padding: 1.5rem; width: 100%; max-width: 720px;
+            max-height: calc(100vh - 3rem); display: flex; flex-direction: column;
+        }
+        .modal h2 { font-size: 1rem; font-weight: 600; margin-bottom: 0.5rem; }
+        .modal-desc { color: var(--text-2); font-size: 0.85rem; margin-bottom: 1rem; }
+        .modal-content {
+            background: var(--bg); border: 1px solid var(--border-soft);
+            border-radius: 6px; padding: 0.85rem; overflow: auto; flex: 1;
+            font-family: 'JetBrains Mono', ui-monospace, monospace;
+            font-size: 0.78rem; white-space: pre; color: var(--text-2);
+            max-height: 60vh;
+        }
+        .modal-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1rem; }
+
+        /* Auto-test panel */
+        .autotest {
+            background: var(--card); border: 1px solid var(--border);
+            border-radius: 8px; padding: 1.25rem; margin-bottom: 1.5rem;
+        }
+        .autotest .head {
+            display: flex; justify-content: space-between; align-items: center;
+            gap: 1rem; flex-wrap: wrap; margin-bottom: 0.75rem;
+        }
+        .autotest .head h3 { font-size: 0.95rem; font-weight: 600; }
+        .autotest .head .meta { font-size: 0.78rem; color: var(--text-2); }
+        .autotest .desc { font-size: 0.82rem; color: var(--text-2); margin-bottom: 0.85rem; line-height: 1.5; }
+
+        .autotest .summary {
+            font-size: 0.85rem; padding: 0.7rem 0.9rem; border-radius: 6px;
+            margin: 0.75rem 0; display: flex; gap: 1rem; align-items: center;
+            font-variant-numeric: tabular-nums; flex-wrap: wrap;
+        }
+        .autotest .summary.ok   { background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.3); color: #6ee7b7; }
+        .autotest .summary.fail { background: rgba(239, 68, 68, 0.08);  border: 1px solid rgba(239, 68, 68, 0.3);  color: #fca5a5; }
+        .autotest .summary.run  { background: rgba(99, 102, 241, 0.08); border: 1px solid rgba(99, 102, 241, 0.3); color: #a5b4fc; }
+        .autotest .summary strong { font-weight: 600; }
+        .autotest .summary .pill {
+            font-size: 0.7rem; font-weight: 600; padding: 0.15rem 0.55rem;
+            border-radius: 4px; text-transform: uppercase; letter-spacing: 0.05em;
+        }
+        .autotest .summary.ok   .pill { background: var(--success); color: #053226; }
+        .autotest .summary.fail .pill { background: var(--error); color: #2c0707; }
+        .autotest .summary.run  .pill { background: var(--accent); color: #0e1238; }
+
+        .autotest-step-list {
+            display: flex; flex-direction: column; gap: 0.4rem; margin: 0.75rem 0;
+        }
+        .autotest-step {
+            display: grid; grid-template-columns: auto 1fr auto; gap: 0.75rem;
+            align-items: center; padding: 0.55rem 0.7rem;
+            background: rgba(255,255,255,0.015); border: 1px solid var(--border-soft);
+            border-radius: 5px; font-size: 0.83rem;
+        }
+        .autotest-step.running { border-color: rgba(99, 102, 241, 0.4); background: rgba(99, 102, 241, 0.06); }
+        .autotest-step.pass    { border-color: rgba(16, 185, 129, 0.3); }
+        .autotest-step.fail    { border-color: rgba(239, 68, 68, 0.4); background: rgba(239, 68, 68, 0.05); }
+
+        .autotest-step .icon { width: 18px; text-align: center; font-weight: 700; }
+        .autotest-step.pending .icon  { color: var(--muted); }
+        .autotest-step.running .icon  { color: #a5b4fc; }
+        .autotest-step.pass    .icon  { color: var(--success); }
+        .autotest-step.fail    .icon  { color: var(--error); }
+        .autotest-step .label { color: var(--text); }
+        .autotest-step.pass .label,
+        .autotest-step.fail .label  { color: var(--text-2); }
+        .autotest-step .duration {
+            font-size: 0.72rem; color: var(--muted);
+            font-family: 'JetBrains Mono', ui-monospace, monospace;
+            font-variant-numeric: tabular-nums; white-space: nowrap;
+        }
+        .autotest-step .err {
+            grid-column: 2 / -1; font-size: 0.75rem; color: #fca5a5; margin-top: 0.25rem;
+            font-family: 'JetBrains Mono', ui-monospace, monospace;
+        }
+
+        .autotest-log {
+            background: var(--bg); border: 1px solid var(--border-soft);
+            border-radius: 6px; padding: 0.6rem 0.8rem; max-height: 220px;
+            overflow-y: auto; font-family: 'JetBrains Mono', ui-monospace, monospace;
+            font-size: 0.75rem; line-height: 1.55; margin-top: 0.5rem;
+        }
+        .autotest-log .l { display: block; }
+        .autotest-log .l.success { color: #6ee7b7; }
+        .autotest-log .l.error   { color: #fca5a5; }
+        .autotest-log .l.info    { color: var(--text-2); }
+        .autotest-log .l .ts {
+            color: var(--muted); margin-right: 0.6rem;
+        }
+
+        /* Stress test specifics */
+        .stress-form {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 0.75rem; margin: 0.75rem 0;
+        }
+        .stress-form label {
+            display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.78rem;
+        }
+        .stress-form label > span {
+            color: var(--muted); text-transform: uppercase;
+            letter-spacing: 0.06em; font-weight: 600; font-size: 0.7rem;
+        }
+        .stress-form input, .stress-form select {
+            background: var(--bg); border: 1px solid var(--border);
+            color: var(--text); padding: 0.5rem 0.7rem; border-radius: 5px;
+            font-family: 'JetBrains Mono', ui-monospace, monospace;
+            font-size: 0.85rem; outline: none;
+            font-variant-numeric: tabular-nums;
+        }
+        .stress-form input:focus, .stress-form select:focus { border-color: var(--primary); }
+
+        .stress-estimate {
+            font-size: 0.78rem; color: var(--text-2); margin: 0.5rem 0 0.75rem;
+            padding: 0.55rem 0.75rem; background: rgba(255,255,255,0.015);
+            border-radius: 5px; border: 1px solid var(--border-soft);
+            font-variant-numeric: tabular-nums;
+        }
+        .stress-estimate .est-label { color: var(--muted); }
+
+        .stress-progress {
+            background: var(--bg); border: 1px solid var(--accent);
+            border-left: 3px solid var(--accent); border-radius: 6px;
+            padding: 0.85rem 1rem; margin: 0.75rem 0;
+        }
+        .stress-progress .phase-label {
+            font-weight: 600; color: #c7d2fe; font-size: 0.88rem;
+            margin-bottom: 0.4rem; display: flex; align-items: center; gap: 0.5rem;
+        }
+        .stress-progress .phase-label::before {
+            content: ''; width: 8px; height: 8px; border-radius: 50%;
+            background: var(--accent); animation: blink 1.6s ease-in-out infinite;
+        }
+        .stress-progress .meta {
+            font-size: 0.78rem; color: var(--text-2); line-height: 1.55;
+            font-variant-numeric: tabular-nums;
+        }
+        .stress-progress .progress-bar {
+            background: var(--border-soft); border-radius: 9999px; height: 4px;
+            margin-top: 0.6rem; overflow: hidden;
+        }
+        .stress-progress .progress-bar > div {
+            height: 100%; background: var(--accent); transition: width 0.4s ease;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="brand">
+                <h1>Test Harness</h1>
+                <span class="tag">CrashSafe Verification</span>
+            </div>
+            <div class="header-actions">
+                <a href="http://localhost:3000" target="_blank" class="btn btn-secondary">Open CrashSafe Dashboard ↗</a>
+                <span id="conn-status" class="status-badge">Connected</span>
+            </div>
+        </header>
+
+        <div class="stat-row">
+            <div class="stat-card">
+                <div class="label">Total Collections</div>
+                <div id="stat-collections" class="value">—</div>
+                <div class="sub">Across all databases</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">Total Documents</div>
+                <div id="stat-documents" class="value">—</div>
+                <div class="sub">Estimated counts</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">Last Refresh</div>
+                <div id="stat-refresh" class="value">—</div>
+                <div class="sub">Auto-polls every 2s</div>
+            </div>
+        </div>
+
+        <div class="section-title">Quick Actions</div>
+        <div class="quick-actions">
+            <p>
+                Use these to set up a known starting state, simulate workload, or compare before/after a backup-and-restore cycle.
+            </p>
+            <div class="row">
+                <button class="btn btn-success" onclick="action('setup-demo')">Setup Demo Data</button>
+                <button class="btn btn-secondary" onclick="bulkInsertAll(50)">+50 docs to every backed-up collection</button>
+                <button class="btn btn-secondary" onclick="bulkModifyAll(20)">Modify 20 random docs in every collection</button>
+                <button class="btn btn-secondary" onclick="bulkDeleteAll(10)">Delete 10 random docs from every collection</button>
+                <button class="btn btn-danger" onclick="confirmWipeAll()">Wipe All Databases</button>
+            </div>
+        </div>
+
+        <div class="section-title">Automated Test</div>
+        <div class="autotest" id="autotest-panel">
+            <div class="head">
+                <h3>End-to-end backup &amp; restore verification</h3>
+                <div class="meta" id="autotest-meta">Idle — never run</div>
+            </div>
+            <p class="desc">
+                Wipes both databases, seeds a known dataset (state&nbsp;A), triggers a full backup, mutates the data (state&nbsp;B), triggers an incremental, then verifies <strong>Restore to Latest</strong> reproduces state&nbsp;B and <strong>Restore to Point</strong> reproduces state&nbsp;A. Compares contents via SHA-256 fingerprints of every collection. Also asserts that the excluded <code>not_a_sensor</code> collection is correctly absent from restored data.
+                <br><br>
+                <strong style="color: var(--error);">Destructive.</strong> All data in <code>owdata</code> and <code>parse</code> will be wiped multiple times during the run. Run only against a disposable test database.
+            </p>
+            <div id="autotest-summary"></div>
+            <div class="autotest-step-list" id="autotest-steps"></div>
+            <div id="autotest-log-wrap" style="display:none">
+                <div class="section-title" style="margin: 0.5rem 0 0.4rem;">Live log</div>
+                <div class="autotest-log" id="autotest-log"></div>
+            </div>
+            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.85rem;">
+                <button class="btn btn-primary" id="autotest-start" onclick="startAutoTest()">Run Auto-Test</button>
+                <button class="btn btn-secondary" id="autotest-toggle-log" onclick="toggleAutoTestLog()">Show log</button>
+            </div>
+        </div>
+
+        <div class="section-title">Stress Test (Volume / Performance)</div>
+        <div class="autotest" id="stress-panel">
+            <div class="head">
+                <h3>Bulk-seed → backup → restore → verify</h3>
+                <div class="meta" id="stress-meta">Idle — never run</div>
+            </div>
+            <p class="desc">
+                Configurable volume test: seeds <em>N</em> sensor collections × <em>M</em> docs each, then triggers a backup (and optionally a full restore + count verification). Use this to measure end-to-end timing and resource usage at scale. Verification is <strong>count-based</strong> here — fingerprint hashing 250M docs would itself take many minutes.
+            </p>
+            <div class="stress-form">
+                <label>
+                    <span>Collections</span>
+                    <input type="number" id="stress-colls" value="100" min="1" max="5000" step="1">
+                </label>
+                <label>
+                    <span>Docs / collection</span>
+                    <input type="number" id="stress-docs" value="1000" min="1" max="100000" step="1">
+                </label>
+                <label>
+                    <span>Mode</span>
+                    <select id="stress-mode">
+                        <option value="seed-only">Seed only (no backup)</option>
+                        <option value="seed-and-backup">Seed + Full Backup</option>
+                        <option value="full-cycle" selected>Full cycle (seed + backup + restore + verify)</option>
+                    </select>
+                </label>
+            </div>
+            <div class="stress-estimate" id="stress-estimate"></div>
+
+            <div id="stress-summary"></div>
+            <div id="stress-progress" class="stress-progress" style="display:none"></div>
+            <div class="autotest-step-list" id="stress-phases"></div>
+            <div id="stress-log-wrap" style="display:none">
+                <div class="section-title" style="margin: 0.5rem 0 0.4rem;">Live log</div>
+                <div class="autotest-log" id="stress-log"></div>
+            </div>
+            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.85rem;">
+                <button class="btn btn-primary" id="stress-start" onclick="startStressTest()">Run Stress Test</button>
+                <button class="btn btn-secondary" id="stress-toggle-log" onclick="toggleStressLog()">Show log</button>
+            </div>
+        </div>
+
+        <div class="layout">
+            <div>
+                <div class="section-title">Databases</div>
+                <div id="dbs"></div>
+            </div>
+
+            <aside class="log">
+                <h3>Activity</h3>
+                <div id="activity-log"></div>
+            </aside>
+        </div>
+    </div>
+
+    <div id="sample-modal" class="modal-overlay">
+        <div class="modal">
+            <h2 id="sample-title">Sample Documents</h2>
+            <div class="modal-desc" id="sample-desc"></div>
+            <pre class="modal-content" id="sample-content"></pre>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeSample()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const log = [];
+        let lastStatus = null;
+
+        function fmtNum(n) {
+            if (n == null || isNaN(n)) return '—';
+            return n.toLocaleString();
+        }
+
+        function logEntry(message, kind) {
+            log.unshift({ ts: new Date(), message, kind: kind || 'info' });
+            if (log.length > 50) log.pop();
+            renderLog();
+        }
+        function renderLog() {
+            const el = document.getElementById('activity-log');
+            if (!log.length) {
+                el.innerHTML = '<div class="log-empty">Actions appear here.</div>';
+                return;
+            }
+            el.innerHTML = log.map(l =>
+                '<div class="log-entry ' + l.kind + '">'
+                  + '<span class="ts">' + l.ts.toLocaleTimeString() + '</span>'
+                  + l.message
+                + '</div>'
+            ).join('');
+        }
+        renderLog();
+
+        async function api(method, url, body) {
+            const opts = { method, headers: {} };
+            if (body !== undefined) {
+                opts.headers['Content-Type'] = 'application/json';
+                opts.body = JSON.stringify(body);
+            }
+            const res = await fetch(url, opts);
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || res.statusText);
+            return data;
+        }
+
+        async function refreshStatus() {
+            try {
+                const data = await api('GET', '/api/status');
+                lastStatus = data;
+                renderStats(data);
+                renderDbs(data);
+                document.getElementById('conn-status').textContent = 'Connected';
+                document.getElementById('conn-status').className = 'status-badge';
+                document.getElementById('stat-refresh').textContent = new Date().toLocaleTimeString();
+            } catch (err) {
+                document.getElementById('conn-status').textContent = 'Disconnected';
+                document.getElementById('conn-status').className = 'status-badge error';
+            }
+        }
+
+        function renderStats(data) {
+            document.getElementById('stat-collections').textContent = fmtNum(data.totals.collections);
+            document.getElementById('stat-documents').textContent = fmtNum(data.totals.documents);
+        }
+
+        function renderDbs(data) {
+            const root = document.getElementById('dbs');
+
+            // Snapshot state of any inputs the user is interacting with so the 2s
+            // poll doesn't blow away their text or focus mid-typing.
+            const inputState = new Map();
+            for (const input of root.querySelectorAll('input')) {
+                if (!input.id) continue;
+                inputState.set(input.id, {
+                    value: input.value,
+                    isFocused: document.activeElement === input,
+                    selStart: input.selectionStart,
+                    selEnd: input.selectionEnd,
+                });
+            }
+
+            root.innerHTML = '';
+            for (const db of data.dbs) {
+                const card = document.createElement('div');
+                card.className = 'db-card';
+
+                const collsHtml = db.collections.length
+                    ? '<table class="coll-table">'
+                      + '<thead><tr><th>Collection</th><th>Documents</th><th></th></tr></thead>'
+                      + '<tbody>' + db.collections.map(c => collRow(db.name, c)).join('') + '</tbody>'
+                      + '</table>'
+                    : '<div class="empty">No collections yet. Create one above or click "Setup Demo Data".</div>';
+
+                card.innerHTML = `
+                    <div class="db-head">
+                        <div>
+                            <h2>${db.name === 'owdata' ? 'Data DB' : (db.name === 'parse' ? 'Parse DB' : db.name)}<span class="db-name mono">${db.name}</span></h2>
+                        </div>
+                        <button class="btn btn-danger btn-sm" onclick="confirmWipeDb('${db.name}')">Wipe ${db.name}</button>
+                    </div>
+
+                    <div class="new-coll-form">
+                        <label for="new-${db.name}">Create:</label>
+                        <input id="new-${db.name}" placeholder="${db.name === 'owdata' ? 'sensors---example or config' : 'collection name'}" />
+                        <button class="btn btn-secondary btn-sm" onclick="createColl('${db.name}')">Create Collection</button>
+                    </div>
+
+                    ${collsHtml}
+                `;
+                root.appendChild(card);
+            }
+
+            // Restore preserved input state.
+            for (const [id, state] of inputState) {
+                const el = document.getElementById(id);
+                if (!el) continue;
+                el.value = state.value;
+                if (state.isFocused) {
+                    el.focus();
+                    try { el.setSelectionRange(state.selStart, state.selEnd); } catch { /* not all input types support it */ }
+                }
+            }
+        }
+
+        function collRow(dbName, c) {
+            const pills = [];
+            if (c.isConfig) pills.push('<span class="pill config">config</span>');
+            if (c.isBackedUp) pills.push('<span class="pill backed-up">backed up</span>');
+            else pills.push('<span class="pill skipped">excluded</span>');
+
+            return `
+                <tr>
+                    <td>
+                        <span class="name">${c.name}</span>
+                        ${pills.join('')}
+                    </td>
+                    <td class="count">${fmtNum(c.count)}</td>
+                    <td>
+                        <div class="actions">
+                            <button class="btn btn-secondary btn-sm" onclick="insert('${dbName}', '${c.name}', 1)">+1</button>
+                            <button class="btn btn-secondary btn-sm" onclick="insert('${dbName}', '${c.name}', 10)">+10</button>
+                            <button class="btn btn-secondary btn-sm" onclick="insert('${dbName}', '${c.name}', 100)">+100</button>
+                            <button class="btn btn-secondary btn-sm" onclick="insert('${dbName}', '${c.name}', 1000)">+1k</button>
+                            <button class="btn btn-secondary btn-sm" onclick="modify('${dbName}', '${c.name}', 1)">~1</button>
+                            <button class="btn btn-secondary btn-sm" onclick="modify('${dbName}', '${c.name}', 10)">~10</button>
+                            <button class="btn btn-secondary btn-sm" onclick="del('${dbName}', '${c.name}', 1)">−1</button>
+                            <button class="btn btn-secondary btn-sm" onclick="del('${dbName}', '${c.name}', 10)">−10</button>
+                            <button class="btn btn-secondary btn-sm" onclick="showSample('${dbName}', '${c.name}')">View</button>
+                            <button class="btn btn-danger btn-sm" onclick="dropColl('${dbName}', '${c.name}')">Drop</button>
+                        </div>
+                    </td>
+                </tr>
+            `;
+        }
+
+        // Action wrappers
+        async function action(name, body) {
+            try {
+                const result = await api('POST', '/api/' + name, body || {});
+                return result;
+            } catch (err) {
+                logEntry('Error: ' + err.message, 'error');
+                throw err;
+            }
+        }
+
+        async function insert(db, coll, count) {
+            try {
+                const r = await action('insert', { db, collection: coll, count });
+                logEntry('Inserted ' + r.inserted + ' into ' + db + '/' + coll, 'success');
+                refreshStatus();
+            } catch {}
+        }
+        async function modify(db, coll, count) {
+            try {
+                const r = await action('modify', { db, collection: coll, count });
+                logEntry('Modified ' + r.modified + ' docs in ' + db + '/' + coll, 'success');
+                refreshStatus();
+            } catch {}
+        }
+        async function del(db, coll, count) {
+            try {
+                const r = await action('delete', { db, collection: coll, count });
+                logEntry('Deleted ' + r.deleted + ' docs from ' + db + '/' + coll, 'success');
+                refreshStatus();
+            } catch {}
+        }
+        async function dropColl(db, coll) {
+            if (!confirm('Drop collection ' + db + '/' + coll + '?')) return;
+            try {
+                await action('drop-collection', { db, collection: coll });
+                logEntry('Dropped ' + db + '/' + coll, 'success');
+                refreshStatus();
+            } catch {}
+        }
+        async function createColl(db) {
+            const input = document.getElementById('new-' + db);
+            const name = (input.value || '').trim();
+            if (!name) return logEntry('Collection name required', 'error');
+            try {
+                await action('create-collection', { db, name });
+                logEntry('Created ' + db + '/' + name, 'success');
+                input.value = '';
+                refreshStatus();
+            } catch {}
+        }
+        function confirmWipeDb(db) {
+            if (!confirm('Drop ALL collections in "' + db + '"?\nThis simulates the disaster you would restore from.')) return;
+            wipeDb(db);
+        }
+        async function wipeDb(db) {
+            try {
+                const r = await action('wipe', { db });
+                logEntry('Wiped ' + db + ' — dropped ' + r.dropped + ' collections', 'success');
+                refreshStatus();
+            } catch {}
+        }
+        function confirmWipeAll() {
+            if (!confirm('Drop ALL collections in BOTH databases?\nThis simulates a complete disaster.')) return;
+            (async () => {
+                for (const db of (lastStatus?.dbs ?? [])) await wipeDb(db.name);
+            })();
+        }
+
+        // Bulk actions
+        async function bulkInsertAll(perColl) {
+            if (!lastStatus) return;
+            for (const db of lastStatus.dbs) {
+                for (const c of db.collections) {
+                    if (!c.isBackedUp) continue;
+                    await insert(db.name, c.name, perColl).catch(() => {});
+                }
+            }
+        }
+        async function bulkModifyAll(perColl) {
+            if (!lastStatus) return;
+            for (const db of lastStatus.dbs) {
+                for (const c of db.collections) {
+                    if (!c.isBackedUp || c.count <= 0) continue;
+                    await modify(db.name, c.name, perColl).catch(() => {});
+                }
+            }
+        }
+        async function bulkDeleteAll(perColl) {
+            if (!lastStatus) return;
+            for (const db of lastStatus.dbs) {
+                for (const c of db.collections) {
+                    if (!c.isBackedUp || c.count <= 0) continue;
+                    await del(db.name, c.name, perColl).catch(() => {});
+                }
+            }
+        }
+
+        // Demo setup wrapper
+        const _action = action;
+        action = async function(name, body) {
+            if (name === 'setup-demo') {
+                try {
+                    const r = await _action(name, body);
+                    logEntry('Demo data created: ' + r.results.length + ' collections seeded', 'success');
+                    refreshStatus();
+                    return r;
+                } catch (err) {
+                    return null;
+                }
+            }
+            return _action(name, body);
+        };
+
+        // Sample modal
+        async function showSample(db, coll) {
+            try {
+                const r = await api('GET', '/api/sample/' + encodeURIComponent(db) + '/' + encodeURIComponent(coll) + '?limit=20');
+                document.getElementById('sample-title').textContent = db + ' / ' + coll;
+                document.getElementById('sample-desc').textContent = 'Showing latest ' + r.docs.length + ' documents (sorted by _id descending).';
+                document.getElementById('sample-content').textContent = JSON.stringify(r.docs, null, 2);
+                document.getElementById('sample-modal').style.display = 'flex';
+            } catch (err) {
+                logEntry('Sample failed: ' + err.message, 'error');
+            }
+        }
+        function closeSample() {
+            document.getElementById('sample-modal').style.display = 'none';
+        }
+
+        refreshStatus();
+        setInterval(refreshStatus, 2000);
+
+        // ===== Auto-Test =====================================================
+
+        const stepLabels = {
+            'wipe-initial':     'Wipe both databases (clean slate)',
+            'seed-initial':     'Seed initial dataset (state A)',
+            'fp-a':             'Fingerprint state A',
+            'full-backup':      'Trigger full backup',
+            'modify':           'Modify data (insert + update + delete + new collection)',
+            'fp-b':             'Fingerprint state B',
+            'inc-backup':       'Trigger incremental backup',
+            'wipe-rl':          'Wipe before Restore to Latest',
+            'restore-latest':   'Trigger Restore to Latest',
+            'verify-rl':        'Verify restored DB == state B',
+            'wipe-rp':          'Wipe before Restore to Point',
+            'restore-point':    'Trigger Restore to Point (full backup)',
+            'verify-rp':        'Verify restored DB == state A',
+            'verify-excl':      'Verify excluded collection absent',
+
+            'rl-state-b':       'Restore to Latest (set up state B)',
+            'modify-2':         'Mutate again to state C',
+            'fp-c':             'Fingerprint state C',
+            'inc-2':            'Trigger second incremental (chain: Full, Inc1, Inc2)',
+            'wipe-pitr-inc1':   'Wipe before PITR to Inc1',
+            'pitr-inc1':        'Restore to Point — Inc1 (must yield state B, NOT C)',
+            'verify-b2':        'Verify restored DB == state B',
+            'wipe-pitr-inc2':   'Wipe before PITR to Inc2',
+            'pitr-inc2':        'Restore to Point — Inc2',
+            'verify-c':         'Verify restored DB == state C',
+
+            'modify-3':         'Mutate further to state D',
+            'fp-d':             'Fingerprint state D',
+            'full-2':           'Trigger second full backup (new checkpoint)',
+            'wipe-pitr-full2':  'Wipe before PITR to Full2',
+            'pitr-full2':       'Restore to Point — Full2 (no leakage from older chain)',
+            'verify-d':         'Verify restored DB == state D',
+
+            'modify-config':    'Delete + modify config docs (state E)',
+            'fp-e':             'Fingerprint state E',
+            'inc-3':            'Trigger third incremental (after config mutation)',
+            'wipe-pitr-inc3':   'Wipe before PITR to Inc3',
+            'pitr-inc3':        'Restore to Point — Inc3 (config delete must be honoured)',
+            'verify-e':         'Verify state E (config has 4 docs, not 5)',
+
+            'audit':            'Audit: backup count and size tracking',
+        };
+
+        function durationMs(s) {
+            if (!s.startedAt) return null;
+            const end = s.finishedAt ? new Date(s.finishedAt).getTime() : Date.now();
+            return end - new Date(s.startedAt).getTime();
+        }
+        function fmtDuration(ms) {
+            if (ms == null) return '';
+            if (ms < 1000) return ms + 'ms';
+            if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
+            const m = Math.floor(ms / 60000);
+            const s = Math.round((ms % 60000) / 1000);
+            return m + 'm ' + s + 's';
+        }
+        function stepIcon(status) {
+            return status === 'pass' ? '✓'
+                 : status === 'fail' ? '✗'
+                 : status === 'running' ? '⟳'
+                 : '○';
+        }
+
+        let logShown = false;
+        function toggleAutoTestLog() {
+            logShown = !logShown;
+            document.getElementById('autotest-log-wrap').style.display = logShown ? 'block' : 'none';
+            document.getElementById('autotest-toggle-log').textContent = logShown ? 'Hide log' : 'Show log';
+        }
+
+        async function startAutoTest() {
+            if (!confirm('Auto-Test will WIPE both databases multiple times. Run only against a disposable test instance.\n\nContinue?')) return;
+            const btn = document.getElementById('autotest-start');
+            btn.disabled = true;
+            try {
+                const res = await fetch('/api/auto-test/start', { method: 'POST' });
+                if (!res.ok) {
+                    const data = await res.json().catch(() => ({}));
+                    alert('Could not start: ' + (data.error || res.statusText));
+                    btn.disabled = false;
+                    return;
+                }
+                if (!logShown) toggleAutoTestLog();
+            } catch (err) {
+                alert('Network error: ' + err.message);
+                btn.disabled = false;
+            }
+        }
+
+        function renderAutoTest(state) {
+            // Default skeleton when no test has ever run
+            const stepIds = Object.keys(stepLabels);
+            const steps = state.steps && state.steps.length
+                ? state.steps
+                : stepIds.map(id => ({ id, label: stepLabels[id], status: 'pending', startedAt: null, finishedAt: null, error: null }));
+
+            // Meta
+            const meta = document.getElementById('autotest-meta');
+            if (state.running) {
+                const elapsed = state.startedAt ? Math.round((Date.now() - new Date(state.startedAt).getTime()) / 1000) : 0;
+                meta.textContent = 'Running · ' + elapsed + 's elapsed';
+            } else if (state.summary) {
+                meta.textContent = 'Last run: ' + (state.summary.ok ? 'PASSED' : 'FAILED') + ' · ' + fmtDuration(state.summary.durationMs);
+            } else {
+                meta.textContent = 'Idle — never run';
+            }
+
+            // Summary banner
+            const summaryEl = document.getElementById('autotest-summary');
+            if (state.running) {
+                summaryEl.innerHTML = '<div class="summary run"><span class="pill">Running</span><span><strong>'
+                                    + (steps.filter(s => s.status === 'pass').length) + '</strong> / ' + steps.length + ' passed</span></div>';
+            } else if (state.summary) {
+                const ok = state.summary.ok;
+                summaryEl.innerHTML = '<div class="summary ' + (ok ? 'ok' : 'fail') + '">'
+                                    + '<span class="pill">' + (ok ? 'Passed' : 'Failed') + '</span>'
+                                    + '<span><strong>' + state.summary.pass + '</strong> / ' + state.summary.total + ' steps passed</span>'
+                                    + (state.summary.fail ? '<span><strong>' + state.summary.fail + '</strong> failed</span>' : '')
+                                    + '<span style="margin-left:auto; color: inherit; opacity: 0.85;">Duration: ' + fmtDuration(state.summary.durationMs) + '</span>'
+                                    + '</div>';
+            } else {
+                summaryEl.innerHTML = '';
+            }
+
+            // Step list
+            const stepsEl = document.getElementById('autotest-steps');
+            stepsEl.innerHTML = steps.map(s => {
+                const status = s.status || 'pending';
+                const dur = (status === 'running' || status === 'pass' || status === 'fail') ? fmtDuration(durationMs(s)) : '';
+                let html = '<div class="autotest-step ' + status + '">'
+                         + '<div class="icon">' + stepIcon(status) + '</div>'
+                         + '<div class="label">' + (s.label || stepLabels[s.id] || s.id) + '</div>'
+                         + '<div class="duration">' + dur + '</div>';
+                if (s.error) html += '<div class="err">' + s.error + '</div>';
+                html += '</div>';
+                return html;
+            }).join('');
+
+            // Log — append-only rendering so the scroll position is preserved
+            // naturally when the user has scrolled up to read older entries.
+            renderAutoTestLog(state);
+
+            document.getElementById('autotest-start').disabled = !!state.running;
+        }
+
+        function escapeHtml(s) {
+            return String(s).replace(/[&<>"']/g, c => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            })[c]);
+        }
+
+        // Append-only log rendering with persistent autoScroll flag.
+        // Driven by user scroll: scrolling to the bottom re-enables auto-scroll;
+        // any other scroll position pins the view in place.
+        let autoScrollLog = true;
+        let renderedLogCount = 0;
+        let logScrollListenerAttached = false;
+
+        function attachLogScrollListener() {
+            if (logScrollListenerAttached) return;
+            const logEl = document.getElementById('autotest-log');
+            if (!logEl) return;
+            logEl.addEventListener('scroll', () => {
+                const atBottom = (logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight) < 8;
+                autoScrollLog = atBottom;
+            }, { passive: true });
+            logScrollListenerAttached = true;
+        }
+
+        function renderAutoTestLog(state) {
+            const logEl = document.getElementById('autotest-log');
+            attachLogScrollListener();
+            const log = state.log || [];
+
+            // New test run started → log shrunk → reset the rendered DOM
+            if (log.length < renderedLogCount) {
+                logEl.innerHTML = '';
+                renderedLogCount = 0;
+                autoScrollLog = true;
+            }
+
+            if (log.length === 0) {
+                if (renderedLogCount === 0 && (!state.steps || !state.steps.length)) {
+                    if (logEl.firstElementChild) return; // already rendered the empty state
+                    logEl.innerHTML = '<span class="l info">No test has been run yet.</span>';
+                }
+                return;
+            }
+
+            // Append only the entries we haven't rendered yet
+            if (log.length > renderedLogCount) {
+                const fragment = document.createDocumentFragment();
+                for (let i = renderedLogCount; i < log.length; i++) {
+                    const l = log[i];
+                    const span = document.createElement('span');
+                    span.className = 'l ' + (l.level || 'info');
+                    const ts = document.createElement('span');
+                    ts.className = 'ts';
+                    ts.textContent = new Date(l.ts).toLocaleTimeString();
+                    span.appendChild(ts);
+                    span.appendChild(document.createTextNode(l.message));
+                    fragment.appendChild(span);
+                }
+                logEl.appendChild(fragment);
+                renderedLogCount = log.length;
+
+                if (autoScrollLog) {
+                    logEl.scrollTop = logEl.scrollHeight;
+                }
+            }
+        }
+
+        async function pollAutoTest() {
+            try {
+                const res = await fetch('/api/auto-test/status');
+                if (!res.ok) return;
+                const state = await res.json();
+                renderAutoTest(state);
+            } catch {}
+        }
+
+        renderAutoTest({});           // initial render with skeleton
+        pollAutoTest();
+        setInterval(pollAutoTest, 1000);
+
+        // ===== Stress Test ===================================================
+
+        function fmtCount(n) {
+            if (n == null || isNaN(n)) return '—';
+            return Number(n).toLocaleString();
+        }
+        function fmtBytes(b) {
+            if (b == null || isNaN(b)) return '—';
+            const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0; let v = Number(b);
+            while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+            return v.toFixed(v >= 100 ? 0 : 1) + ' ' + u[i];
+        }
+        function fmtMs(ms) {
+            if (ms == null || isNaN(ms)) return '—';
+            if (ms < 1000) return Math.round(ms) + 'ms';
+            const s = ms / 1000;
+            if (s < 60) return s.toFixed(1) + 's';
+            const m = Math.floor(s / 60);
+            const sec = Math.round(s % 60);
+            if (m < 60) return m + 'm ' + sec + 's';
+            const h = Math.floor(m / 60); const min = m % 60;
+            return h + 'h ' + min + 'm';
+        }
+
+        function updateStressEstimate() {
+            const colls = parseInt(document.getElementById('stress-colls').value, 10) || 0;
+            const docs  = parseInt(document.getElementById('stress-docs').value, 10) || 0;
+            const total = colls * docs;
+
+            // Rough heuristics — assume modest single-DB hardware:
+            //   insert: ~10k docs/sec
+            //   raw doc: ~120 bytes; gzipped ~35 bytes
+            //   mongodump:    ~50 MB/s of raw input, plus ~50ms startup per collection
+            //   mongorestore: similar
+            const insertS  = total / 10000;
+            const rawBytes = total * 120;
+            const gzBytes  = total * 35;
+            const dumpS    = (rawBytes / (50 * 1024 * 1024)) + colls * 0.05;
+            const restoreS = (rawBytes / (40 * 1024 * 1024)) + colls * 0.06;
+            const cycleS   = insertS + dumpS + restoreS + 5;
+
+            const el = document.getElementById('stress-estimate');
+            if (total === 0) {
+                el.innerHTML = '<span class="est-label">Total docs:</span> —';
+                return;
+            }
+            el.innerHTML =
+                  '<span class="est-label">Total docs:</span> ' + fmtCount(total)
+                + '   <span class="est-label">Raw size:</span> ' + fmtBytes(rawBytes)
+                + '   <span class="est-label">Backup (gzipped):</span> ~' + fmtBytes(gzBytes)
+                + '   <span class="est-label">Est. seed:</span> ~' + fmtMs(insertS * 1000)
+                + '   <span class="est-label">Est. full cycle:</span> ~' + fmtMs(cycleS * 1000)
+                + '<br><small style="color: var(--muted)">Estimates are rough — actual time depends heavily on disk speed, mongodump overhead per collection, and concurrent load.</small>';
+        }
+        document.getElementById('stress-colls').addEventListener('input', updateStressEstimate);
+        document.getElementById('stress-docs').addEventListener('input', updateStressEstimate);
+        updateStressEstimate();
+
+        async function startStressTest() {
+            const colls = parseInt(document.getElementById('stress-colls').value, 10);
+            const docs  = parseInt(document.getElementById('stress-docs').value, 10);
+            const mode  = document.getElementById('stress-mode').value;
+
+            if (!Number.isFinite(colls) || colls < 1 || colls > 5000) {
+                return alert('Collections must be between 1 and 5000');
+            }
+            if (!Number.isFinite(docs) || docs < 1 || docs > 100000) {
+                return alert('Docs/collection must be between 1 and 100000');
+            }
+
+            const total = colls * docs;
+            const warn = total >= 1000000
+                ? '\nThis will create ' + total.toLocaleString() + ' documents and may take a long time and use significant disk space.'
+                : '';
+            if (!confirm('Start stress test?\n' + colls + ' collections × ' + docs + ' docs (' + total.toLocaleString() + ' total)\n' + warn + '\nContinue?')) return;
+
+            try {
+                const res = await fetch('/api/stress-test/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ collections: colls, docsPerCollection: docs, mode }),
+                });
+                if (!res.ok) {
+                    const data = await res.json().catch(() => ({}));
+                    return alert('Could not start: ' + (data.error || res.statusText));
+                }
+                if (!stressLogShown) toggleStressLog();
+            } catch (err) {
+                alert('Network error: ' + err.message);
+            }
+        }
+
+        let stressLogShown = false;
+        function toggleStressLog() {
+            stressLogShown = !stressLogShown;
+            document.getElementById('stress-log-wrap').style.display = stressLogShown ? 'block' : 'none';
+            document.getElementById('stress-toggle-log').textContent = stressLogShown ? 'Hide log' : 'Show log';
+        }
+
+        let stressLogRendered = 0;
+        let stressAutoScroll = true;
+        let stressLogListenerAttached = false;
+        function attachStressLogListener() {
+            if (stressLogListenerAttached) return;
+            const el = document.getElementById('stress-log');
+            if (!el) return;
+            el.addEventListener('scroll', () => {
+                stressAutoScroll = (el.scrollHeight - el.scrollTop - el.clientHeight) < 8;
+            }, { passive: true });
+            stressLogListenerAttached = true;
+        }
+
+        function renderStressLog(state) {
+            const el = document.getElementById('stress-log');
+            attachStressLogListener();
+            const log = state.log || [];
+
+            if (log.length < stressLogRendered) {
+                el.innerHTML = '';
+                stressLogRendered = 0;
+                stressAutoScroll = true;
+            }
+            if (log.length === 0) {
+                if (!stressLogRendered) el.innerHTML = '<span class="l info">No stress test has been run yet.</span>';
+                return;
+            }
+            if (log.length > stressLogRendered) {
+                const frag = document.createDocumentFragment();
+                for (let i = stressLogRendered; i < log.length; i++) {
+                    const l = log[i];
+                    const span = document.createElement('span');
+                    span.className = 'l ' + (l.level || 'info');
+                    const ts = document.createElement('span');
+                    ts.className = 'ts';
+                    ts.textContent = new Date(l.ts).toLocaleTimeString();
+                    span.appendChild(ts);
+                    span.appendChild(document.createTextNode(l.message));
+                    frag.appendChild(span);
+                }
+                el.appendChild(frag);
+                stressLogRendered = log.length;
+                if (stressAutoScroll) el.scrollTop = el.scrollHeight;
+            }
+        }
+
+        function renderStress(state) {
+            // Meta
+            const metaEl = document.getElementById('stress-meta');
+            if (state.running) {
+                const elapsedS = state.startedAt ? Math.round((Date.now() - new Date(state.startedAt).getTime()) / 1000) : 0;
+                metaEl.textContent = 'Running · ' + fmtMs(elapsedS * 1000) + ' elapsed';
+            } else if (state.summary) {
+                metaEl.textContent = 'Last run: ' + (state.summary.ok ? 'PASSED' : 'FAILED') + ' · total ' + fmtMs(state.summary.totalDurationMs);
+            } else {
+                metaEl.textContent = 'Idle — never run';
+            }
+
+            // Summary banner
+            const summaryEl = document.getElementById('stress-summary');
+            if (state.running) {
+                summaryEl.innerHTML = '<div class="summary run"><span class="pill">Running</span><span><strong>'
+                                    + (state.phases?.filter(p => p.finishedAt).length || 0) + '</strong> phases done</span></div>';
+            } else if (state.summary) {
+                const ok = state.summary.ok;
+                const totalDocs = state.config?.totalDocs ?? 0;
+                summaryEl.innerHTML = '<div class="summary ' + (ok ? 'ok' : 'fail') + '">'
+                                    + '<span class="pill">' + (ok ? 'Passed' : 'Failed') + '</span>'
+                                    + (totalDocs ? '<span><strong>' + fmtCount(totalDocs) + '</strong> docs</span>' : '')
+                                    + '<span style="margin-left:auto; opacity: 0.85;">Duration: ' + fmtMs(state.summary.totalDurationMs) + '</span>'
+                                    + '</div>';
+            } else {
+                summaryEl.innerHTML = '';
+            }
+
+            // Live progress block
+            const progEl = document.getElementById('stress-progress');
+            if (state.running && state.progress) {
+                const pp = state.progress;
+                let title = '', meta = [], pct = 0;
+                if (pp.phase === 'seeding') {
+                    title = 'Seeding';
+                    meta.push('Collection <strong>' + pp.currentCollection + ' / ' + pp.totalCollections + '</strong>');
+                    meta.push('Docs <strong>' + fmtCount(pp.docsInserted) + ' / ' + fmtCount(pp.totalDocs) + '</strong>');
+                    if (pp.rateDocsPerSec) meta.push(fmtCount(pp.rateDocsPerSec) + ' docs/s');
+                    if (pp.etaMs != null) meta.push('ETA ' + fmtMs(pp.etaMs));
+                    pct = pp.pct ?? 0;
+                } else if (pp.phase === 'indexing') {
+                    title = 'Creating updatedAt indexes';
+                    meta.push('<strong>' + pp.currentCollection + ' / ' + pp.totalCollections + '</strong> collections indexed');
+                    pct = pp.pct ?? 0;
+                } else if (pp.phase === 'backup') {
+                    title = 'Full backup';
+                    if (pp.currentDb && pp.currentCollection) meta.push('Working on <strong>' + pp.currentDb + ' / ' + pp.currentCollection + '</strong>');
+                    if (pp.totalCollections) meta.push((pp.processedCollections + 1) + ' / ' + pp.totalCollections + ' collections');
+                    pct = pp.pct ?? 0;
+                } else if (pp.phase === 'restore') {
+                    title = 'Restore';
+                    if (pp.subPhase) meta.push('Phase <strong>' + pp.subPhase + '</strong>');
+                    if (pp.currentEntry) meta.push('Replaying ' + new Date(pp.currentEntry).toLocaleString());
+                    if (pp.totalSteps) {
+                        meta.push((pp.processedSteps + 1) + ' / ' + pp.totalSteps + ' steps');
+                        pct = Math.min(100, Math.round((pp.processedSteps / pp.totalSteps) * 100));
+                    }
+                }
+                progEl.innerHTML = '<div class="phase-label">' + title + '</div>'
+                                 + '<div class="meta">' + meta.join(' · ') + '</div>'
+                                 + '<div class="progress-bar"><div style="width:' + pct + '%"></div></div>';
+                progEl.style.display = 'block';
+            } else {
+                progEl.style.display = 'none';
+            }
+
+            // Phases as step list
+            const phasesEl = document.getElementById('stress-phases');
+            const phases = state.phases || [];
+            if (!phases.length) {
+                phasesEl.innerHTML = '';
+            } else {
+                phasesEl.innerHTML = phases.map(p => {
+                    const status = p.error ? 'fail' : (p.finishedAt ? 'pass' : 'running');
+                    const icon = status === 'fail' ? '✗' : status === 'pass' ? '✓' : '⟳';
+                    const dur = p.durationMs != null ? fmtMs(p.durationMs) : '';
+                    let html = '<div class="autotest-step ' + status + '">'
+                             + '<div class="icon">' + icon + '</div>'
+                             + '<div class="label">' + escapeHtml(p.name) + (p.details ? ' <span style="color: var(--muted); font-size: 0.75rem;">— ' + escapeHtml(Object.entries(p.details).slice(0, 3).map(([k, v]) => k + '=' + v).join(', ')) + '</span>' : '') + '</div>'
+                             + '<div class="duration">' + dur + '</div>';
+                    if (p.error) html += '<div class="err">' + escapeHtml(p.error) + '</div>';
+                    html += '</div>';
+                    return html;
+                }).join('');
+            }
+
+            renderStressLog(state);
+            document.getElementById('stress-start').disabled = !!state.running;
+        }
+
+        async function pollStress() {
+            try {
+                const res = await fetch('/api/stress-test/status');
+                if (!res.ok) return;
+                const state = await res.json();
+                renderStress(state);
+            } catch {}
+        }
+        renderStress({});
+        pollStress();
+        setInterval(pollStress, 1500);
+    </script>
+</body>
+</html>

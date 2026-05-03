@@ -54,9 +54,48 @@ function readManifest(dbBackupDir) {
     return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
 }
 
+/**
+ * Atomically write `content` to `filePath`. Crash-safe in three ways:
+ *   1. Write to a sibling `.tmp` file, then rename(2) onto the target.
+ *      POSIX rename within one directory is atomic — concurrent readers always
+ *      see either the previous file or the new one, never a torn write.
+ *   2. fsync the tmp file before the rename, so the data has reached disk and
+ *      can't be lost to a power cut between the rename and the page-cache flush.
+ *   3. fsync the parent directory after the rename, so the directory entry
+ *      change itself is durable. Without this, a crash could undo the rename
+ *      even though the new file's data was already on disk.
+ *
+ * Best-effort: directory fsync is wrapped in try/catch because it's not
+ * supported on every platform (Windows). On the Linux container this code
+ * runs in, all four steps execute.
+ */
+function atomicWriteFile(filePath, content) {
+    const dir = path.dirname(filePath);
+    const tmpPath = filePath + '.tmp';
+
+    fs.writeFileSync(tmpPath, content, 'utf-8');
+
+    // fsync the tmp file's data to disk before swapping it into place
+    const fd = fs.openSync(tmpPath, 'r');
+    try { fs.fsyncSync(fd); }
+    finally { fs.closeSync(fd); }
+
+    fs.renameSync(tmpPath, filePath);
+
+    // fsync the directory so the rename itself is durable
+    try {
+        const dirFd = fs.openSync(dir, 'r');
+        try { fs.fsyncSync(dirFd); }
+        finally { fs.closeSync(dirFd); }
+    } catch { /* directory fsync not supported on this platform */ }
+}
+
 function writeManifest(dbBackupDir, manifest) {
     fs.mkdirSync(dbBackupDir, { recursive: true });
-    fs.writeFileSync(path.join(dbBackupDir, MANIFEST_FILE), JSON.stringify(manifest, null, 2), 'utf-8');
+    atomicWriteFile(
+        path.join(dbBackupDir, MANIFEST_FILE),
+        JSON.stringify(manifest, null, 2)
+    );
 }
 
 function appendBackupEntry(dbBackupDir, entry) {
@@ -79,7 +118,14 @@ function findEntry(dbBackupDir, backupId) {
 }
 
 /**
- * Return all entries from the first full backup up to and including backupId.
+ * Return the replay chain ending at backupId. The chain starts at the most
+ * recent `type:'full'` entry at-or-before backupId, because each full backup
+ * is a checkpoint — anything before it is irrelevant for a wipe-and-restore.
+ *
+ * Without this, an empty DB captured as a fresh full would be undone by the
+ * earlier full's data being replayed first (the empty full has no dump dir
+ * and no tracking, so it can't actively re-empty the database).
+ *
  * @param {string} dbBackupDir
  * @param {string} backupId
  * @returns {BackupEntry[]}
@@ -88,7 +134,9 @@ function getChainUpTo(dbBackupDir, backupId) {
     const { backups } = readManifest(dbBackupDir);
     const idx = backups.findIndex((b) => b.id === backupId);
     if (idx === -1) return [];
-    return backups.slice(0, idx + 1);
+    let startIdx = idx;
+    while (startIdx > 0 && backups[startIdx].type !== 'full') startIdx--;
+    return backups.slice(startIdx, idx + 1);
 }
 
 /**
@@ -122,4 +170,8 @@ module.exports = { readManifest, writeManifest, appendBackupEntry, findEntry, ge
  * @property {number}   [size]       Total disk usage of this backup in bytes (dump + tracking + id snapshot). Optional for entries written before size tracking existed; backfilled lazily on daemon start.
  * @property {string}   [trigger]    Origin of the run that wrote this entry: 'scheduled' | 'api' | 'cli'. Optional for entries written before trigger persistence existed.
  * @property {string}   [finishedAt] ISO timestamp when this DB's portion of the run completed. Optional for entries written before this field existed.
+ * @property {object}   [checksums]  SHA-256 hex digests of every file produced by this backup, keyed by path relative to dbBackupDir. Split into three sections so verify failures can be triaged: `dump` corrupt blocks restore; `tracking` corrupt blocks delete/upsert replay; `ids` corrupt blocks inc-chain delete detection. Each section is null when no file of that kind exists for the entry. Optional for entries written before checksum tracking existed; verify reports those as 'no-baseline' rather than failing.
+ * @property {object}   [checksums.dump]      Map of `<file dump path relative to dbBackupDir>` → hex sha256
+ * @property {object}   [checksums.tracking]  Map containing the single tracking-file path → hex sha256
+ * @property {object}   [checksums.ids]       Map of `<id-snapshot path relative to dbBackupDir>` → hex sha256
  */

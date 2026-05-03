@@ -1,0 +1,91 @@
+services:
+  mongodb:
+    image: mongo:7
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: password
+    ports:
+      - "127.0.0.1:27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test:
+        - CMD
+        - mongosh
+        - --quiet
+        - -u
+        - admin
+        - -p
+        - password
+        - --authenticationDatabase
+        - admin
+        - --eval
+        - db.adminCommand('ping')
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks: [test-net]
+
+  crashsafe:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    environment:
+      OPENINC_MONGO_BACKUP_URI: "mongodb://admin:password@mongodb/?authSource=admin"
+      OPENINC_MONGO_BACKUP_DIR: "/backups"
+      # Tight cron so you don't have to wait long while testing.
+      OPENINC_MONGO_BACKUP_CRON: "*/45 * * * *"
+      OPENINC_MONGO_BACKUP_DB_DATA: "owdata"
+      OPENINC_MONGO_BACKUP_DB_PARSE: "parse"
+      OPENINC_MONGO_BACKUP_COLLECTION_PREFIX: "sensors---"
+      OPENINC_MONGO_BACKUP_SENSOR_CONFIG_COLLECTION: "config"
+      OPENINC_MONGO_BACKUP_UPDATED_AT_FIELD: "updatedAt"
+      OPENINC_MONGO_BACKUP_UI_PORT: "3000"
+      OPENINC_MONGO_BACKUP_APPEND_ONLY_DATA: "true"
+      # To require login on the dashboard, uncomment both:
+      # OPENINC_MONGO_BACKUP_AUTH_USER: "admin"
+      # OPENINC_MONGO_BACKUP_AUTH_PASSWORD: "test123"
+    command:
+      - daemon
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./backups:/backups
+    networks: [test-net]
+
+  testapp:
+    build:
+      context: ./testapp
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    environment:
+      MONGO_URI: "mongodb://admin:password@mongodb/?authSource=admin"
+      DATA_DB: "owdata"
+      PARSE_DB: "parse"
+      COLLECTION_PREFIX: "sensors---"
+      CONFIG_COLLECTION: "config"
+      CRASHSAFE_BACKUP_DIR: "/backups"
+      PORT: "3001"
+    ports:
+      - "127.0.0.1:3001:3001"
+    # The integrity-verify phase of the auto-test corrupts a single byte in a
+    # backup dump file to prove `verify` actually catches it. That requires
+    # write access to the backup tree. Production deploys must NOT mount this
+    # — testapp is a test harness only.
+    volumes:
+      - ./backups:/backups
+    networks: [test-net]
+
+volumes:
+  mongo-data:
+
+networks:
+  test-net:
+    driver: bridge
