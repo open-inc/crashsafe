@@ -62,8 +62,13 @@ docker run -d --env-file .env -p 3000:3000 openinc-crashsafe
 | `OPENINC_MONGO_BACKUP_COLLECTION_PREFIX` | ❌ | `sensors---` | Filter for data collections |
 | `OPENINC_MONGO_BACKUP_SENSOR_CONFIG_COLLECTION` | ❌ | `config` | Name of the data DB's config collection. Always fully tracked — never affected by Append-Only Mode. |
 | `OPENINC_MONGO_BACKUP_UPDATED_AT_FIELD` | ❌ | `updatedAt` | Field name for change detection |
-| `OPENINC_MONGO_BACKUP_AUTH_USER` | ❌ | — | Username for the dashboard's HTTP Basic Auth. Set together with `AUTH_PASSWORD` to enable auth; leave both unset to disable. |
-| `OPENINC_MONGO_BACKUP_AUTH_PASSWORD` | ❌ | — | Password for the dashboard's HTTP Basic Auth. |
+| `OPENINC_MONGO_BACKUP_AUTH_USER` | ⚠️ | — | Username for the dashboard's HTTP Basic Auth. Set together with `AUTH_PASSWORD` to enable. **At least one of `AUTH_USER`+`AUTH_PASSWORD` or `ALLOWED_IPS` MUST be set — the daemon refuses to start otherwise.** |
+| `OPENINC_MONGO_BACKUP_AUTH_PASSWORD` | ⚠️ | — | Password for the dashboard's HTTP Basic Auth. |
+| `OPENINC_MONGO_BACKUP_ALLOWED_IPS` | ⚠️ | — | Comma-separated allowlist of source IPs / CIDR ranges (IPv4 + IPv6) permitted to reach the dashboard and API. Applied **before** Basic Auth, so unauthorized IPs never see the auth challenge. A malformed entry crashes the daemon at startup. Example: `10.0.0.0/8,192.168.1.5,2001:db8::/32`. |
+| `OPENINC_MONGO_BACKUP_TRUST_PROXY` | ❌ | `false` | When `true`, the IP allowlist (and access logs) read the client IP from the leftmost `X-Forwarded-For` entry instead of the socket peer. **Only enable when the daemon is reachable exclusively via a known reverse proxy** — otherwise an attacker can spoof the header and bypass the allowlist. |
+| `OPENINC_MONGO_BACKUP_TLS_CERT` | ⚠️ | — | Path to the TLS certificate (PEM, full chain). When set together with `TLS_KEY`, the daemon serves HTTPS natively. |
+| `OPENINC_MONGO_BACKUP_TLS_KEY` | ⚠️ | — | Path to the matching TLS private key (PEM). Setting only one of `TLS_CERT`/`TLS_KEY` is rejected at startup. |
+| `OPENINC_MONGO_BACKUP_ALLOW_INSECURE_HTTP` | ⚠️ | `false` | Explicit acknowledgement that running on plain HTTP is acceptable because TLS is terminated upstream by a reverse proxy. **Without TLS configured AND without this flag, the daemon refuses to start.** Never enable when the daemon is reachable directly from untrusted networks. |
 | `OPENINC_MONGO_BACKUP_APPEND_ONLY_DATA` | ❌ | `false` | Append-only mode for the data DB. Skips delete detection on incrementals — much faster for hot sensor streams, but **deletions are not captured**. The config collection is exempt. See *Append-Only Mode* below. |
 | `OPENINC_MONGO_BACKUP_APPEND_ONLY_PARSE` | ❌ | `false` | Same as above, for the Parse DB. |
 | `OPENINC_MONGO_BACKUP_VERIFY_CRON` | ❌ | — | Cron expression for scheduled integrity verification (e.g. `0 4 * * *` for daily at 04:00). Empty / unset = no scheduled verify, only on-demand. Failures log at `error` level with the message `Scheduled verify found corruption` — wire that into your alerting. |
@@ -76,7 +81,19 @@ docker run -d --env-file .env -p 3000:3000 openinc-crashsafe
 ### Web Dashboard
 Start the daemon and visit `http://localhost:3000`. You can monitor recent runs and trigger manual backups, restores, or integrity checks per database.
 
-The dashboard is unauthenticated by default. To require login, set `OPENINC_MONGO_BACKUP_AUTH_USER` **and** `OPENINC_MONGO_BACKUP_AUTH_PASSWORD` — the server then enforces HTTP Basic Auth on every route (UI + API), and the browser shows its native login dialog. Setting only one of the two is rejected at startup, so the daemon can't silently boot without auth. Run the dashboard behind HTTPS (e.g. Coolify's reverse proxy) since Basic Auth credentials are base64-encoded, not encrypted.
+**The daemon refuses to start unless at least one access gate is configured.** This eliminates the classic "left it on default" deploy that exposed destructive endpoints to the network. You must set either:
+
+- `OPENINC_MONGO_BACKUP_AUTH_USER` **and** `OPENINC_MONGO_BACKUP_AUTH_PASSWORD` — HTTP Basic Auth on every route. Setting only one of the two is rejected at startup. The browser shows its native login dialog.
+- *and / or* `OPENINC_MONGO_BACKUP_ALLOWED_IPS` — comma-separated list of IPs or CIDR ranges (IPv4 + IPv6). Requests from any other source get a `403 Forbidden` *before* the auth check runs, so the auth dialog isn't even visible from disallowed networks. A malformed entry crashes the daemon at startup with a clear error.
+
+If the daemon sits behind a reverse proxy and you need the allowlist to apply to the original client IP, set `OPENINC_MONGO_BACKUP_TRUST_PROXY=true` so the gate reads `X-Forwarded-For`. **Never enable this when the daemon is reachable directly from untrusted networks** — `X-Forwarded-For` is attacker-controlled in that case.
+
+**The daemon also refuses plain HTTP by default.** Choose either:
+
+- `OPENINC_MONGO_BACKUP_TLS_CERT` + `OPENINC_MONGO_BACKUP_TLS_KEY` — serve HTTPS natively from the daemon.
+- *or* `OPENINC_MONGO_BACKUP_ALLOW_INSECURE_HTTP=true` — explicit acknowledgement that TLS is terminated by a reverse proxy on the same trust boundary, and the daemon is unreachable from untrusted networks.
+
+Additional baseline hardening always-on: state-changing POSTs require a same-origin `Origin`/`Referer` and `Content-Type: application/json` (CSRF gate), request bodies are capped at 256 KiB, and the dashboard HTML is served with `X-Frame-Options: DENY` plus a strict CSP.
 
 ### HTTP API
 

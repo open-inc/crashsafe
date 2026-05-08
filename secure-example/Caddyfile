@@ -1,0 +1,51 @@
+# Caddy config — fronts CrashSafe with TLS termination and a single-IP allowlist.
+#
+# Reads three env vars from docker-compose: PUBLIC_DOMAIN, ALLOWED_CLIENT_IP,
+# LETSENCRYPT_EMAIL. Caddy auto-resolves them via {$VAR} syntax at startup.
+#
+# Defense layers Caddy contributes:
+#   - automatic HTTPS via Let's Encrypt + HSTS
+#   - remote_ip allowlist BEFORE proxying (cheap reject)
+#   - sets X-Forwarded-For to the real client (overwrites any client-supplied
+#     value, which is what makes CrashSafe's TRUST_PROXY=true safe here)
+
+{
+    email {$LETSENCRYPT_EMAIL}
+    # No admin API exposure outside the container
+    admin localhost:2019
+}
+
+{$PUBLIC_DOMAIN} {
+    # Match: requests from the operator's IP. Anything else falls through to
+    # the default `handle` block at the bottom and gets a flat 403.
+    @allowed remote_ip {$ALLOWED_CLIENT_IP}
+
+    handle @allowed {
+        reverse_proxy crashsafe:3000 {
+            # Caddy already sets X-Forwarded-For/Proto/Host by default.
+            # Pass them through unchanged so CrashSafe's IP gate sees the
+            # original client IP via TRUST_PROXY=true.
+            header_up X-Forwarded-Proto https
+        }
+    }
+
+    handle {
+        # Anyone NOT on the allowlist: blanket 403, no info leak.
+        respond "Forbidden" 403 {
+            close
+        }
+    }
+
+    # HSTS: tell browsers to always use HTTPS for this host going forward.
+    # 2 years + preload-eligible. Only enable preload after you're sure.
+    header Strict-Transport-Security "max-age=63072000; includeSubDomains"
+
+    # Caddy logs every request — useful for forensics ("when did <ip> hit us")
+    # since CrashSafe itself doesn't access-log successful requests.
+    log {
+        output stdout
+        format console
+    }
+
+    encode gzip zstd
+}

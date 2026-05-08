@@ -1,5 +1,6 @@
 'use strict';
 const http = require('node:http');
+const https = require('node:https');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -11,8 +12,17 @@ const { readLockInfo } = require('./locking');
 const scheduler = require('./scheduler');
 const config = require('./config');
 const logger = require('./logger');
+const { parseAllowList, isAllowed, getClientIp } = require('./ip-allow');
+const {
+    isSameOriginRequest,
+    contentTypeBase,
+    readBodyWithLimit,
+    DEFAULT_MAX_BODY_BYTES,
+} = require('./http-guards');
+const { validateAccessGate, resolveTlsMode } = require('./startup-validation');
 
 let server = null;
+let allowList = []; // populated in start() from config.allowedIps
 
 // ---------------------------------------------------------------------------
 // Destructive-restore confirmation tokens
@@ -51,6 +61,84 @@ function consumeRestoreConfirm(token, target) {
     if (entry.expiresAt < Date.now()) return false;
     if (entry.target !== target) return false;
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// IP allowlist (optional — empty list disables the gate)
+// ---------------------------------------------------------------------------
+
+/** Returns true if the request is from an allowed IP. On failure sends a 403 and returns false. */
+function checkIpAllowed(req, res) {
+    if (allowList.length === 0) return true;
+    const ip = getClientIp(req, config.trustProxy);
+    if (isAllowed(ip, allowList)) return true;
+
+    logger.warn({ ip, trustProxy: config.trustProxy }, 'Dashboard request rejected — source IP not in allowlist');
+    res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('Forbidden');
+    return false;
+}
+
+// ---------------------------------------------------------------------------
+// CSRF / cross-origin gate (POST only)
+// ---------------------------------------------------------------------------
+//
+// Without this gate, an attacker page could submit a same-credential POST
+// (the browser auto-attaches Basic-Auth from cache) and trigger a backup or
+// verify run. The destructive restore is already token-gated, but the other
+// mutating endpoints relied solely on auth being present. We close that hole
+// at the request layer by:
+//
+//   1. requiring `Content-Type: application/json` — eliminates the classic
+//      `<form enctype="text/plain">` CSRF construction;
+//   2. requiring `Origin` (or fallback `Referer`) to match the request's
+//      `Host` — eliminates the cross-origin fetch attack with cached creds.
+
+/** Returns true on same-origin JSON POSTs. On failure responds with 4xx and returns false. */
+function checkCsrf(req, res) {
+    if (req.method !== 'POST') return true;
+
+    const ct = contentTypeBase(req);
+    if (ct !== 'application/json') {
+        logger.warn({ url: req.url, contentType: ct || '(missing)' }, 'POST rejected — Content-Type must be application/json');
+        res.writeHead(415, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Content-Type must be application/json' }));
+        return false;
+    }
+
+    if (!isSameOriginRequest(req)) {
+        logger.warn({
+            url: req.url,
+            origin: req.headers.origin || null,
+            referer: req.headers.referer || null,
+            host: req.headers.host || null,
+        }, 'POST rejected — Origin/Referer does not match Host (CSRF gate)');
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'cross-origin request rejected' }));
+        return false;
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Body reader for POST handlers — wraps readBodyWithLimit and translates
+// EBODYTOOLARGE into a 413 response.
+// ---------------------------------------------------------------------------
+
+async function readJsonBody(req, res) {
+    try {
+        return { ok: true, raw: await readBodyWithLimit(req, DEFAULT_MAX_BODY_BYTES) };
+    } catch (err) {
+        if (err && err.code === 'EBODYTOOLARGE') {
+            logger.warn({ url: req.url, limit: DEFAULT_MAX_BODY_BYTES }, 'POST rejected — body exceeds size limit');
+            res.writeHead(413, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: `request body exceeds ${DEFAULT_MAX_BODY_BYTES} bytes` }));
+            return { ok: false };
+        }
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'failed to read request body' }));
+        return { ok: false };
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -152,13 +240,40 @@ function getLatestBackups() {
 const requestHandler = async (req, res) => {
     const { method, url } = req;
 
+    // Network-layer gate first: an unauthorized IP shouldn't even see the auth challenge.
+    if (!checkIpAllowed(req, res)) return;
     if (!checkAuth(req, res)) return;
+    // CSRF gate runs after auth so unauthorised origins still see 401, not 403 —
+    // avoids leaking which is configured. POSTs only.
+    if (!checkCsrf(req, res)) return;
 
     // Static files
     if (method === 'GET' && url === '/') {
         const filePath = path.join(__dirname, '..', 'public', 'index.html');
         if (fs.existsSync(filePath)) {
-            res.writeHead(200, { 'Content-Type': 'text/html' });
+            // CSP is tuned for the Ant/React/Babel-on-CDN page. It's primarily
+            // a clickjacking + form-CSRF gate (frame-ancestors / form-action);
+            // 'unsafe-inline'/'unsafe-eval' are unavoidable because the page
+            // uses inline <script type="text/babel"> and Babel's runtime
+            // compiler. The page renders no untrusted input, so XSS surface
+            // is effectively zero.
+            res.writeHead(200, {
+                'Content-Type': 'text/html; charset=utf-8',
+                'X-Frame-Options': 'DENY',
+                'X-Content-Type-Options': 'nosniff',
+                'Referrer-Policy': 'no-referrer',
+                'Content-Security-Policy': [
+                    "default-src 'self'",
+                    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com",
+                    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com",
+                    "font-src 'self' https://fonts.gstatic.com",
+                    "img-src 'self' data:",
+                    "connect-src 'self'",
+                    "frame-ancestors 'none'",
+                    "base-uri 'self'",
+                    "form-action 'self'",
+                ].join('; '),
+            });
             return fs.createReadStream(filePath).pipe(res);
         }
         res.writeHead(404);
@@ -189,31 +304,29 @@ const requestHandler = async (req, res) => {
 
     // API: Trigger Backup
     if (method === 'POST' && url === '/api/trigger/backup') {
-        let body = '';
-        req.on('data', chunk => { body += chunk; });
-        req.on('end', async () => {
-            try {
-                const data = JSON.parse(body || '{}');
-                const isFull = data.type === 'full';
-                const target = data.target || 'all';
-                logger.info({ isFull, target }, 'Manual backup triggered via API');
+        const body = await readJsonBody(req, res);
+        if (!body.ok) return;
+        try {
+            const data = JSON.parse(body.raw || '{}');
+            const isFull = data.type === 'full';
+            const target = data.target || 'all';
+            logger.info({ isFull, target }, 'Manual backup triggered via API');
 
-                // Run in background to avoid blocking response
-                runBackup({ full: isFull, target, trigger: 'api' })
-                    .then((result) => {
-                        if (result?.skipped) {
-                            logger.warn({ reason: result.reason, holder: result.holder }, 'Manual backup skipped (another run in progress)');
-                        }
-                    })
-                    .catch(err => logger.error({ err }, 'Manual backup failed'));
+            // Run in background to avoid blocking response
+            runBackup({ full: isFull, target, trigger: 'api' })
+                .then((result) => {
+                    if (result?.skipped) {
+                        logger.warn({ reason: result.reason, holder: result.holder }, 'Manual backup skipped (another run in progress)');
+                    }
+                })
+                .catch(err => logger.error({ err }, 'Manual backup failed'));
 
-                res.writeHead(202, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ message: 'Backup started' }));
-            } catch (err) {
-                res.writeHead(400);
-                res.end(JSON.stringify({ error: 'Invalid request' }));
-            }
-        });
+            res.writeHead(202, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ message: 'Backup started' }));
+        } catch (err) {
+            res.writeHead(400);
+            res.end(JSON.stringify({ error: 'Invalid request' }));
+        }
         return;
     }
 
@@ -225,25 +338,23 @@ const requestHandler = async (req, res) => {
     // impossible: a caller must do two round-trips, and the second must
     // arrive within the window.
     if (method === 'POST' && url === '/api/restore/confirm') {
-        let body = '';
-        req.on('data', chunk => { body += chunk; });
-        req.on('end', () => {
-            try {
-                const data = JSON.parse(body || '{}');
-                const target = data.target || 'all';
-                if (!['data', 'parse', 'all'].includes(target)) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    return res.end(JSON.stringify({ error: 'invalid target' }));
-                }
-                const issued = issueRestoreConfirm(target);
-                logger.info({ target, expiresAt: issued.expiresAt }, 'Restore confirmation token issued');
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify(issued));
-            } catch {
-                res.writeHead(400);
-                res.end(JSON.stringify({ error: 'Invalid request' }));
+        const body = await readJsonBody(req, res);
+        if (!body.ok) return;
+        try {
+            const data = JSON.parse(body.raw || '{}');
+            const target = data.target || 'all';
+            if (!['data', 'parse', 'all'].includes(target)) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify({ error: 'invalid target' }));
             }
-        });
+            const issued = issueRestoreConfirm(target);
+            logger.info({ target, expiresAt: issued.expiresAt }, 'Restore confirmation token issued');
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(issued));
+        } catch {
+            res.writeHead(400);
+            res.end(JSON.stringify({ error: 'Invalid request' }));
+        }
         return;
     }
 
@@ -266,59 +377,57 @@ const requestHandler = async (req, res) => {
     // versions could be wiped with a single curl POST. Both UI typing and
     // server tokens apply.
     if (method === 'POST' && url === '/api/trigger/restore') {
-        let body = '';
-        req.on('data', chunk => { body += chunk; });
-        req.on('end', async () => {
-            try {
-                const data = JSON.parse(body || '{}');
-                const isFull = data.type === 'full';
-                const target = data.target || 'all';
-                const sinceId = data.sinceId || null;
-                const backupId = data.backupId || null;
-                const dropExisting = !!data.dropExisting;
-                const mode = data.mode === 'sidecar' ? 'sidecar' : 'direct';
-                const verifyChecksums = !!data.verifyChecksums;
+        const body = await readJsonBody(req, res);
+        if (!body.ok) return;
+        try {
+            const data = JSON.parse(body.raw || '{}');
+            const isFull = data.type === 'full';
+            const target = data.target || 'all';
+            const sinceId = data.sinceId || null;
+            const backupId = data.backupId || null;
+            const dropExisting = !!data.dropExisting;
+            const mode = data.mode === 'sidecar' ? 'sidecar' : 'direct';
+            const verifyChecksums = !!data.verifyChecksums;
 
-                if (data.mode && !['direct', 'sidecar'].includes(data.mode)) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    return res.end(JSON.stringify({ error: `invalid mode "${data.mode}" — expected "direct" or "sidecar"` }));
-                }
-
-                // Server-side gate: any destructive operation requires a
-                // fresh, matching token from /api/restore/confirm. Sidecar
-                // mode is destructive too — the swap replaces the live DB —
-                // so the token gate applies regardless of `dropExisting`.
-                const isDestructive = dropExisting || mode === 'sidecar';
-                if (isDestructive) {
-                    const ok = consumeRestoreConfirm(data.confirmToken, target);
-                    if (!ok) {
-                        logger.warn({ target, mode, hasToken: !!data.confirmToken }, 'Destructive restore rejected — invalid or missing confirm token');
-                        res.writeHead(403, { 'Content-Type': 'application/json' });
-                        return res.end(JSON.stringify({
-                            error: 'destructive restore requires a confirm token',
-                            hint: 'POST /api/restore/confirm with the same target first; tokens expire after 60 s and are single-use',
-                        }));
-                    }
-                }
-
-                logger.info({ isFull, target, sinceId, backupId, dropExisting, mode, verifyChecksums }, 'Manual restore triggered via API');
-
-                // Run in background
-                runRestore(target, backupId, isFull, sinceId, dropExisting, 'api', { verifyChecksums, mode })
-                    .then((result) => {
-                        if (result?.skipped) {
-                            logger.warn({ reason: result.reason, holder: result.holder }, 'Manual restore skipped (another operation in progress)');
-                        }
-                    })
-                    .catch(err => logger.error({ err }, 'Manual restore failed'));
-
-                res.writeHead(202, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ message: 'Restore started' }));
-            } catch (err) {
-                res.writeHead(400);
-                res.end(JSON.stringify({ error: 'Invalid request' }));
+            if (data.mode && !['direct', 'sidecar'].includes(data.mode)) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify({ error: `invalid mode "${data.mode}" — expected "direct" or "sidecar"` }));
             }
-        });
+
+            // Server-side gate: any destructive operation requires a
+            // fresh, matching token from /api/restore/confirm. Sidecar
+            // mode is destructive too — the swap replaces the live DB —
+            // so the token gate applies regardless of `dropExisting`.
+            const isDestructive = dropExisting || mode === 'sidecar';
+            if (isDestructive) {
+                const ok = consumeRestoreConfirm(data.confirmToken, target);
+                if (!ok) {
+                    logger.warn({ target, mode, hasToken: !!data.confirmToken }, 'Destructive restore rejected — invalid or missing confirm token');
+                    res.writeHead(403, { 'Content-Type': 'application/json' });
+                    return res.end(JSON.stringify({
+                        error: 'destructive restore requires a confirm token',
+                        hint: 'POST /api/restore/confirm with the same target first; tokens expire after 60 s and are single-use',
+                    }));
+                }
+            }
+
+            logger.info({ isFull, target, sinceId, backupId, dropExisting, mode, verifyChecksums }, 'Manual restore triggered via API');
+
+            // Run in background
+            runRestore(target, backupId, isFull, sinceId, dropExisting, 'api', { verifyChecksums, mode })
+                .then((result) => {
+                    if (result?.skipped) {
+                        logger.warn({ reason: result.reason, holder: result.holder }, 'Manual restore skipped (another operation in progress)');
+                    }
+                })
+                .catch(err => logger.error({ err }, 'Manual restore failed'));
+
+            res.writeHead(202, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ message: 'Restore started' }));
+        } catch (err) {
+            res.writeHead(400);
+            res.end(JSON.stringify({ error: 'Invalid request' }));
+        }
         return;
     }
 
@@ -327,31 +436,29 @@ const requestHandler = async (req, res) => {
     // /api/trigger/backup — 202 returns immediately, completion is observed
     // by polling /api/status (lastVerify + inFlight).
     if (method === 'POST' && url === '/api/trigger/verify') {
-        let body = '';
-        req.on('data', chunk => { body += chunk; });
-        req.on('end', async () => {
-            try {
-                const data = JSON.parse(body || '{}');
-                const target = data.target || 'all';
-                const backupId = data.backupId || null;
-                const deep = !!data.deep;
-                logger.info({ target, backupId, deep }, 'Manual verify triggered via API');
+        const body = await readJsonBody(req, res);
+        if (!body.ok) return;
+        try {
+            const data = JSON.parse(body.raw || '{}');
+            const target = data.target || 'all';
+            const backupId = data.backupId || null;
+            const deep = !!data.deep;
+            logger.info({ target, backupId, deep }, 'Manual verify triggered via API');
 
-                runVerify({ target, backupId, deep, trigger: 'api' })
-                    .then((result) => {
-                        if (result?.skipped) {
-                            logger.warn({ reason: result.reason, holder: result.holder }, 'Manual verify skipped (another operation in progress)');
-                        }
-                    })
-                    .catch(err => logger.error({ err }, 'Manual verify failed'));
+            runVerify({ target, backupId, deep, trigger: 'api' })
+                .then((result) => {
+                    if (result?.skipped) {
+                        logger.warn({ reason: result.reason, holder: result.holder }, 'Manual verify skipped (another operation in progress)');
+                    }
+                })
+                .catch(err => logger.error({ err }, 'Manual verify failed'));
 
-                res.writeHead(202, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ message: 'Verify started' }));
-            } catch (err) {
-                res.writeHead(400);
-                res.end(JSON.stringify({ error: 'Invalid request' }));
-            }
-        });
+            res.writeHead(202, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ message: 'Verify started' }));
+        } catch (err) {
+            res.writeHead(400);
+            res.end(JSON.stringify({ error: 'Invalid request' }));
+        }
         return;
     }
 
@@ -370,10 +477,49 @@ function start() {
         );
     }
 
+    // Parse the IP allowlist eagerly so a malformed entry crashes the daemon
+    // at startup with a clear error, instead of locking every legitimate
+    // request out at runtime.
+    try {
+        allowList = parseAllowList(config.allowedIps);
+    } catch (err) {
+        throw new Error(`OPENINC_MONGO_BACKUP_ALLOWED_IPS is malformed: ${err.message}`);
+    }
+
+    // Mandatory: at least one of auth / IP allowlist.
+    validateAccessGate({
+        authOn: authEnabled(),
+        ipAllowlistSize: allowList.length,
+    });
+
+    // Mandatory: HTTPS or explicit acknowledgement of plain HTTP.
+    const tls = resolveTlsMode({
+        tlsCert: config.tlsCert,
+        tlsKey: config.tlsKey,
+        allowInsecureHttp: config.allowInsecureHttp,
+    });
+
     const port = config.uiPort;
-    server = http.createServer(requestHandler);
+    server = tls.mode === 'https'
+        ? https.createServer({ key: tls.key, cert: tls.cert }, requestHandler)
+        : http.createServer(requestHandler);
+
     server.listen(port, () => {
-        logger.info({ port, authEnabled: authEnabled() }, 'Status Page UI server started');
+        logger.info({
+            port,
+            scheme: tls.mode,
+            authEnabled: authEnabled(),
+            ipAllowlistSize: allowList.length,
+            trustProxy: config.trustProxy,
+        }, 'Status Page UI server started');
+
+        if (tls.mode === 'http') {
+            logger.warn(
+                'Daemon is listening on plain HTTP (ALLOW_INSECURE_HTTP=true). ' +
+                'Only safe behind a TLS-terminating reverse proxy on the same trust boundary. ' +
+                'Set OPENINC_MONGO_BACKUP_TLS_CERT and TLS_KEY to enable native HTTPS.'
+            );
+        }
     });
 }
 

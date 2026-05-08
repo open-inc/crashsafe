@@ -84,6 +84,29 @@ const config = {
   // --- Web Dashboard auth (HTTP Basic). Both must be set to enable; both empty disables auth. ---
   get authUser() { return get('AUTH_USER', null) || null; },
   get authPassword() { return get('AUTH_PASSWORD', null) || null; },
+
+  // --- Web Dashboard IP allowlist. Comma-separated list of IPs/CIDRs (IPv4+IPv6).
+  // Empty / unset = no IP gate (any source allowed). Applied before Basic Auth,
+  // so unauthorized IPs never reach the auth challenge. ---
+  get allowedIps() { return get('ALLOWED_IPS', '') || ''; },
+
+  // Trust X-Forwarded-For for client IP resolution. Only enable when the
+  // daemon is reachable exclusively via a known reverse proxy — otherwise
+  // an attacker can spoof the header and trivially bypass the allowlist.
+  get trustProxy() { return get('TRUST_PROXY', '').toLowerCase() === 'true'; },
+
+  // --- TLS for the dashboard. Both cert and key paths must be set together
+  // to enable native HTTPS. When unset, the daemon refuses to start unless
+  // ALLOW_INSECURE_HTTP=true acknowledges that TLS is terminated upstream
+  // (e.g. by a reverse proxy on the same host). ---
+  get tlsCert() { return get('TLS_CERT', null) || null; },
+  get tlsKey() { return get('TLS_KEY', null) || null; },
+
+  // Explicit acknowledgement that the operator is fine with the daemon
+  // speaking plain HTTP — i.e. they have a TLS-terminating proxy in front
+  // and the daemon is not reachable directly from untrusted networks.
+  // Without this flag and without TLS_CERT/TLS_KEY, startup is refused.
+  get allowInsecureHttp() { return get('ALLOW_INSECURE_HTTP', '').toLowerCase() === 'true'; },
 };
 
 module.exports = config;

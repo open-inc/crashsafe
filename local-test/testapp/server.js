@@ -257,7 +257,13 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 async function csFetch(pathPart, opts = {}) {
     const url = CRASHSAFE_URL + pathPart;
-    const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+    const headers = {
+        'Content-Type': 'application/json',
+        // Match the daemon's CSRF gate: non-browser POSTs need a same-origin
+        // Origin header explicitly, since Node's fetch() omits it by default.
+        'Origin': CRASHSAFE_URL,
+        ...(opts.headers || {}),
+    };
     if (CRASHSAFE_AUTH_USER && CRASHSAFE_AUTH_PASS) {
         headers['Authorization'] = 'Basic ' + Buffer.from(CRASHSAFE_AUTH_USER + ':' + CRASHSAFE_AUTH_PASS).toString('base64');
     }
@@ -1553,7 +1559,10 @@ async function runAutoTest() {
         // wipe production.
         await runStep(steps.tokenGateRefused, async () => {
             const url = CRASHSAFE_URL + '/api/trigger/restore';
-            const headers = { 'Content-Type': 'application/json' };
+            // Send Origin so the request reaches the token gate (otherwise the
+            // CSRF gate rejects with 403 first and we'd be testing the wrong
+            // layer). Auth is included for the same reason.
+            const headers = { 'Content-Type': 'application/json', Origin: CRASHSAFE_URL };
             if (CRASHSAFE_AUTH_USER && CRASHSAFE_AUTH_PASS) {
                 headers.Authorization = 'Basic ' + Buffer.from(CRASHSAFE_AUTH_USER + ':' + CRASHSAFE_AUTH_PASS).toString('base64');
             }

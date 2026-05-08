@@ -1,0 +1,155 @@
+# ---------------------------------------------------------------------------
+# Production-shaped CrashSafe deploy, locked down to a single operator IP.
+#
+# Layout (defense in depth, three independent gates):
+#
+#   internet ─► caddy ──► crashsafe ──► mongodb
+#               │ ↑          │ ↑          │
+#               │ TLS+IP     │ Auth+IP    │ password-auth, no public exposure
+#               │ allowlist  │ allowlist  │
+#
+#   Gate 1 (Caddy):     remote_ip allowlist + TLS termination via Let's Encrypt
+#   Gate 2 (CrashSafe): IP allowlist on X-Forwarded-For + HTTP Basic Auth
+#   Gate 3 (CSRF/Body/CSP): enforced inside CrashSafe regardless of caller
+#
+# Even if Gate 1 is misconfigured (e.g. someone removes the matcher), Gate 2
+# still rejects with 403. Even if both are misconfigured, the destructive
+# restore endpoints are token-gated. The point is that no single mistake in
+# this file is sufficient to expose the dashboard.
+#
+# Container exposure: ONLY caddy publishes ports. crashsafe and mongodb live on
+# an `internal: true` network, so even if a container CVE drops a shell, the
+# attacker still has to pivot through caddy to reach the outside, and through
+# the daemon's auth/CSRF/body gates to reach mongo.
+#
+# Required setup:
+#   1. cp .env.example .env  &&  edit .env
+#   2. Point your DNS A record `${PUBLIC_DOMAIN}` at this host's public IP
+#   3. docker compose up -d
+#
+# For private networks without a public domain, swap the Caddyfile for one
+# using `tls internal` (Caddy's built-in PKI) instead of Let's Encrypt.
+# ---------------------------------------------------------------------------
+
+name: crashsafe-prod
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      # 80 is required for the Let's Encrypt HTTP-01 challenge.
+      # Only port 443 is the user-facing one.
+      - "80:80"
+      - "443:443"
+    environment:
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN}
+      ALLOWED_CLIENT_IP: ${ALLOWED_CLIENT_IP}
+      LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data # persistent: Let's Encrypt account + certs
+      - caddy_config:/config
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:2019/config/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks: [edge, backend]
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  crashsafe:
+    image: openinc-crashsafe:latest
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    environment:
+      OPENINC_MONGO_BACKUP_URI: "mongodb://${MONGO_USER}:${MONGO_PASSWORD}@mongodb/?authSource=admin"
+      OPENINC_MONGO_BACKUP_DB_DATA: ${DB_DATA}
+      OPENINC_MONGO_BACKUP_DB_PARSE: ${DB_PARSE}
+      OPENINC_MONGO_BACKUP_DIR: "/backups"
+      OPENINC_MONGO_BACKUP_CRON: "0 * * * *"
+      OPENINC_MONGO_BACKUP_VERIFY_CRON: "0 4 * * *"
+      OPENINC_MONGO_BACKUP_VERIFY_DEEP: "true"
+
+      # ── Access gates ────────────────────────────────────────────────────
+      OPENINC_MONGO_BACKUP_AUTH_USER: ${ADMIN_USER}
+      OPENINC_MONGO_BACKUP_AUTH_PASSWORD: ${ADMIN_PASSWORD}
+      # /32 = exactly one IPv4 host. The daemon reads X-Forwarded-For (set by
+      # Caddy) because TRUST_PROXY=true; this is safe ONLY because crashsafe
+      # is unreachable directly from the internet (no `ports:` block here).
+      OPENINC_MONGO_BACKUP_ALLOWED_IPS: "${ALLOWED_CLIENT_IP}/32"
+      OPENINC_MONGO_BACKUP_TRUST_PROXY: "true"
+      # Plain HTTP between Caddy and CrashSafe over the docker `backend`
+      # network is fine: the trust boundary is the same host, and the network
+      # is `internal: true` (no internet exposure).
+      OPENINC_MONGO_BACKUP_ALLOW_INSECURE_HTTP: "true"
+    volumes:
+      - backups:/backups
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    networks: [backend]
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  mongodb:
+    image: mongo:7
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD}
+    volumes:
+      - mongodb_data:/data/db
+    healthcheck:
+      test:
+        - CMD
+        - mongosh
+        - --quiet
+        - -u
+        - ${MONGO_USER}
+        - -p
+        - ${MONGO_PASSWORD}
+        - --authenticationDatabase
+        - admin
+        - --eval
+        - db.adminCommand('ping')
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    # Same as crashsafe: NO `ports:` block. mongodb is only reachable from
+    # crashsafe over the internal docker network.
+    networks: [backend]
+
+volumes:
+  backups:
+  mongodb_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  edge:
+    # Caddy lives here AND on backend. This network is the only path to the
+    # internet (for Let's Encrypt) and from the internet (port 443).
+  backend:
+    # `internal: true` blocks ALL outbound internet from containers on this
+    # network. crashsafe and mongodb don't need the internet for normal
+    # operation — if they do (e.g. monitoring agent), add a separate network
+    # explicitly rather than dropping this flag.
+    internal: true

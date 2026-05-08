@@ -47,9 +47,14 @@ services:
       OPENINC_MONGO_BACKUP_UPDATED_AT_FIELD: "updatedAt"
       OPENINC_MONGO_BACKUP_UI_PORT: "3000"
       OPENINC_MONGO_BACKUP_APPEND_ONLY_DATA: "true"
-      # To require login on the dashboard, uncomment both:
-      # OPENINC_MONGO_BACKUP_AUTH_USER: "admin"
-      # OPENINC_MONGO_BACKUP_AUTH_PASSWORD: "test123"
+      # Access gate — at least ONE of (AUTH_USER+AUTH_PASSWORD) or ALLOWED_IPS
+      # MUST be set, otherwise the daemon refuses to start.
+      OPENINC_MONGO_BACKUP_AUTH_USER: "admin"
+      OPENINC_MONGO_BACKUP_AUTH_PASSWORD: "test123"
+      # Local-test runs behind no reverse proxy, but stays on 127.0.0.1 only
+      # (see ports: below). Acknowledge plain HTTP explicitly — production
+      # deployments should set TLS_CERT/TLS_KEY instead.
+      OPENINC_MONGO_BACKUP_ALLOW_INSECURE_HTTP: "true"
     command:
       - daemon
     ports:
@@ -73,6 +78,10 @@ services:
       CONFIG_COLLECTION: "config"
       CRASHSAFE_BACKUP_DIR: "/backups"
       PORT: "3001"
+      # Match the crashsafe service's auth and CSRF gates. Without these the
+      # testapp would 401 (no auth) and 403 (cross-origin) on every call.
+      CRASHSAFE_AUTH_USER: "admin"
+      CRASHSAFE_AUTH_PASSWORD: "test123"
     ports:
       - "127.0.0.1:3001:3001"
     # The integrity-verify phase of the auto-test corrupts a single byte in a
