@@ -1,0 +1,28 @@
+==========================================================
+Run:           baseline
+Target / Type: data / full
+Started:       2026-05-19T05:55:42Z
+Duration:      1672s
+Last backup id seen on dashboard: 2026-05-19T05:55:42.381Z
+
+--- Peak memory (used) ---
+  local-test-crashsafe-1         98.7 MiB
+  local-test-mongodb-1           495.1 MiB
+  local-test-testapp-1           48.8 MiB
+
+--- Peak memory (% of limit) ---
+  local-test-crashsafe-1         38.6%
+  local-test-mongodb-1           48.4%
+  local-test-testapp-1           0.3%
+
+--- OOM events during the run ---
+  count: 0
+
+--- Container state ---
+  local-test-crashsafe-1         restarts=0  last_state_oom=false
+  local-test-mongodb-1           restarts=0  last_state_oom=false
+  local-test-testapp-1           restarts=0  last_state_oom=false
+
+--- Slow queries in mongo log during run ---
+  count: 0
+==========================================================

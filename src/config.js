@@ -72,6 +72,25 @@ const config = {
   get appendOnlyData() { return get('APPEND_ONLY_DATA', '').toLowerCase() === 'true'; },
   get appendOnlyParse() { return get('APPEND_ONLY_PARSE', '').toLowerCase() === 'true'; },
 
+  // --- Pause between collections during a backup. Default: 300ms.
+  // Raise on shared / single-node Mongo deployments where mongodump's read load
+  // competes with the live workload — a longer pause gives WiredTiger time to
+  // evict and checkpoint between collections, so the live DB's working set is
+  // not constantly thrashed. Values in the low seconds (2000-5000) are typical
+  // for "polite" backups on a single mongod that also serves an application. ---
+  get collectionPauseMs() {
+      const n = parseInt(get('COLLECTION_PAUSE_MS', '300'), 10);
+      return Number.isFinite(n) && n >= 0 ? n : 300;
+  },
+
+  // --- Run mongodump at low CPU + IO priority. Default: false.
+  // When true, mongodump is spawned via `nice -n 19 ionice -c 3 mongodump …`,
+  // which tells the Linux kernel to give the dump process only idle CPU/IO
+  // slices. The live workload always wins under contention — backups take
+  // longer, but the host stays responsive. Linux-only; on macOS `nice` exists
+  // but `ionice` does not — enabling this on macOS will fail at spawn time. ---
+  get niceBackup() { return get('NICE_BACKUP', '').toLowerCase() === 'true'; },
+
   // --- Scheduled integrity verification. Default: empty → no scheduled verify.
   // When set, the daemon runs `openinc-crashsafe verify` on this cron, separate
   // from the backup cron, so bit-rot / silent corruption gets noticed without

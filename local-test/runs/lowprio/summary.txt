@@ -1,0 +1,28 @@
+==========================================================
+Run:           lowprio
+Target / Type: data / full
+Started:       2026-05-19T06:27:41Z
+Duration:      3601s
+Last backup id seen on dashboard: 2026-05-19T05:55:42.381Z
+
+--- Peak memory (used) ---
+  local-test-crashsafe-1         91.2 MiB
+  local-test-mongodb-1           423.1 MiB
+  local-test-testapp-1           41.1 MiB
+
+--- Peak memory (% of limit) ---
+  local-test-crashsafe-1         35.6%
+  local-test-mongodb-1           41.3%
+  local-test-testapp-1           0.3%
+
+--- OOM events during the run ---
+  count: 0
+
+--- Container state ---
+  local-test-crashsafe-1         restarts=0  last_state_oom=false
+  local-test-mongodb-1           restarts=0  last_state_oom=false
+  local-test-testapp-1           restarts=0  last_state_oom=false
+
+--- Slow queries in mongo log during run ---
+  count: 0
+==========================================================

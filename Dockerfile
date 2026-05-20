@@ -3,11 +3,14 @@
 FROM node:lts-alpine
 
 # Pull the latest Alpine security patches at build time, then install
-# MongoDB CLI tools (mongodump, mongorestore). Rebuild the image periodically
-# to pick up new CVE fixes from the upstream Alpine repos.
+# MongoDB CLI tools (mongodump, mongorestore) and util-linux (provides
+# `ionice`, needed when OPENINC_MONGO_BACKUP_NICE_BACKUP=true wraps mongodump
+# in `nice -n 19 ionice -c 3 …`). `nice` itself ships with busybox so no
+# extra package is needed for the CPU-priority side. Rebuild the image
+# periodically to pick up new CVE fixes from the upstream Alpine repos.
 RUN apk update \
     && apk upgrade --no-cache \
-    && apk add --no-cache mongodb-tools
+    && apk add --no-cache mongodb-tools util-linux
 
 WORKDIR /app
 

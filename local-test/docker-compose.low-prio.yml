@@ -1,0 +1,25 @@
+# Compose override: enable the "polite backup" knobs added for single-node
+# Mongo deployments — longer pause between collections and low-priority
+# mongodump (nice + ionice). Layer this on top of docker-compose.yml (and
+# optionally docker-compose.low-mem.yml) to compare against the defaults.
+#
+# Usage (with the constrained host):
+#   docker compose \
+#     -f docker-compose.yml \
+#     -f docker-compose.low-mem.yml \
+#     -f docker-compose.low-prio.yml \
+#     up -d --build
+
+services:
+  crashsafe:
+    environment:
+      # 1 s between collections — 3× the 300 ms baseline. Plenty to see
+      # the timing difference and the nice/ionice effect locally without
+      # the run taking many hours. Production deployments on a single
+      # mongod can safely go to 2000-5000 ms; tune in your own .env or
+      # this override to find your sweet spot.
+      OPENINC_MONGO_BACKUP_COLLECTION_PAUSE_MS: "1000"
+      # Wrap mongodump in `nice -n 19 ionice -c 3 …` so the kernel only
+      # grants it idle CPU/IO slices. The live workload always wins under
+      # contention; backups take longer, host stays responsive.
+      OPENINC_MONGO_BACKUP_NICE_BACKUP: "true"

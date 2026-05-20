@@ -1,0 +1,31 @@
+# Compose override: simulate a memory-constrained host.
+#
+# Layer this on top of docker-compose.yml so the daemon and Mongo each get
+# a tiny RAM budget — close enough to a "2% free RAM" host that the same
+# failure modes show up (WiredTiger thrashing, OOM-kills, slow queries).
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.low-mem.yml up -d --build
+#
+# Watch live with `docker stats` in a second terminal. A container that gets
+# OOM-killed by the kernel exits 137 and `docker compose ps` shows it
+# restarting.
+
+services:
+  mongodb:
+    # 1 GiB is "small production server" tight — WiredTiger's cache target
+    # (~50 % of RAM) lands at ~512 MiB, which holds 5 000 small collections
+    # comfortably *at idle* but evicts heavily once a backup pumps reads
+    # through every collection in sequence. That's the dynamic we want to
+    # observe: not a hard OOM-kill (real servers have swap and don't
+    # tip over instantly), but slow-query bursts as the working set
+    # churns. Swap is intentionally NOT disabled — production hosts have
+    # it, and disabling it here just forced unrelated startup OOMs when
+    # Mongo loaded its catalog.
+    mem_limit: 1g
+
+  crashsafe:
+    # The Dockerfile's --max-old-space-size=1024 is way above this limit;
+    # 256 MiB still forces Node to OOM-kill cleanly if our backup code
+    # allocates more than it should. A clean fix stays well below this.
+    mem_limit: 256m

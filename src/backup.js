@@ -16,7 +16,6 @@ const logger = require('./logger');
 // Tunables
 // ---------------------------------------------------------------------------
 
-const COLLECTION_PAUSE_MS = 300;
 const CURSOR_BATCH_SIZE = 1000;
 
 // ---------------------------------------------------------------------------
@@ -96,12 +95,16 @@ function sleep(ms) {
 }
 
 /**
- * Execute mongodump as a child process.
+ * Execute mongodump as a child process. When `config.niceBackup` is true, the
+ * dump is wrapped in `nice -n 19 ionice -c 3 …` so the kernel only grants it
+ * idle CPU/IO slices — the live workload always wins under contention. The
+ * URI redactor in the error/stderr serializers still applies because it
+ * matches on the URI substring, not on argv[0].
  */
 function runMongoDump(uri, dbName, collName, query, outDir) {
     return new Promise((resolve, reject) => {
         const queryStr = query ? EJSON.stringify(query, { relaxed: false }) : '';
-        const args = [
+        const dumpArgs = [
             `--uri=${uri}`,
             '--db', dbName,
             '--collection', collName,
@@ -110,10 +113,15 @@ function runMongoDump(uri, dbName, collName, query, outDir) {
         ];
 
         if (queryStr) {
-            args.push('--query', queryStr);
+            dumpArgs.push('--query', queryStr);
         }
 
-        execFile('mongodump', args, { maxBuffer: 1024 * 1024 * 10 }, (error, stdout, stderr) => {
+        const cmd = config.niceBackup ? 'nice' : 'mongodump';
+        const args = config.niceBackup
+            ? ['-n', '19', 'ionice', '-c', '3', 'mongodump', ...dumpArgs]
+            : dumpArgs;
+
+        execFile(cmd, args, { maxBuffer: 1024 * 1024 * 10 }, (error, stdout, stderr) => {
             if (error) {
                 // execFile's error object carries `cmd` (full argv including
                 // --uri=mongodb://user:password@host) — must scrub before logging.
@@ -296,9 +304,16 @@ async function backupDb(dbName, dbType, forceFull, id, trigger, appendOnly, dryR
             mode: useAppendOnly ? 'append-only' : 'standard',
         });
 
-        // Give MongoDB's WiredTiger cache a moment to evict and checkpoint.
-        // No need to throttle in dry-run since we're not pressuring the cache.
-        if (!dryRun) await sleep(COLLECTION_PAUSE_MS);
+        // Give MongoDB's WiredTiger cache a moment to evict and checkpoint —
+        // but ONLY after work that actually pressured it (a real mongodump).
+        // Without the hasChanges guard, the pause runs once per collection
+        // unconditionally; on a 25 000-collection deployment with a 3 s
+        // pause that adds up to 21 hours of pure waiting per backup, which
+        // makes 2×/day cron impossible. The ID-enumeration cursors that
+        // run on every collection are lightweight by comparison (one
+        // projection-only scan, no fork, no compression) — they don't
+        // need a recovery window.
+        if (!dryRun && hasChanges) await sleep(config.collectionPauseMs);
         processedCount++;
     }
 

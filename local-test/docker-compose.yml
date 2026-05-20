@@ -36,21 +36,155 @@ services:
       mongodb:
         condition: service_healthy
     environment:
+      # =====================================================================
+      # CONNECTION
+      # =====================================================================
+
+      # MongoDB connection URI the daemon connects to for backups. Includes
+      # credentials inline; do NOT log this verbatim — the daemon's logger
+      # redacts URIs before writing, but never echo it manually.
       OPENINC_MONGO_BACKUP_URI: "mongodb://admin:password@mongodb/?authSource=admin"
+
+      # Optional separate destination for `restore`. When set, mongorestore
+      # writes to this URI instead of the backup URI — useful for replaying
+      # into a sandbox cluster without changing the main configuration.
+      # Defaults to the backup URI if unset.
+      # OPENINC_MONGO_BACKUP_RESTORE_URI: "mongodb://admin:password@sandbox/?authSource=admin"
+
+      # =====================================================================
+      # WHAT GETS BACKED UP
+      # =====================================================================
+
+      # On-disk location for backup files (manifest.json, dumps, id snapshots).
+      # Inside the container; bind-mounted to ./backups on the host (see volumes:).
       OPENINC_MONGO_BACKUP_DIR: "/backups"
-      # Tight cron so you don't have to wait long while testing.
-      OPENINC_MONGO_BACKUP_CRON: "*/45 * * * *"
+
+      # Sensor / data DB name. Backups follow the collection-prefix filter
+      # below. Leave empty to skip the data DB entirely. Refuses admin /
+      # config / local at startup — those are MongoDB system DBs and would
+      # cause data loss if touched.
       OPENINC_MONGO_BACKUP_DB_DATA: "owdata"
+
+      # Parse Server DB name. Every collection in this DB gets backed up
+      # (no prefix filter). Leave empty to skip.
       OPENINC_MONGO_BACKUP_DB_PARSE: "parse"
+
+      # Within the data DB, only collections starting with this prefix get
+      # backed up. Default lets you sit a CrashSafe install next to a
+      # mixed-tenant DB without backing up unrelated collections.
       OPENINC_MONGO_BACKUP_COLLECTION_PREFIX: "sensors---"
+
+      # The "config" collection in the data DB is *always* fully backed up
+      # regardless of the prefix filter — it's typically the catalog of
+      # which sensors exist, and is small enough to dump in full every run.
       OPENINC_MONGO_BACKUP_SENSOR_CONFIG_COLLECTION: "config"
+
+      # Document field used for change detection on incremental backups.
+      # Docs whose value is `> lastRunTime` are treated as changed and
+      # land in the incremental's dump.
       OPENINC_MONGO_BACKUP_UPDATED_AT_FIELD: "updatedAt"
-      OPENINC_MONGO_BACKUP_UI_PORT: "3000"
+
+      # =====================================================================
+      # SCHEDULE
+      # =====================================================================
+
+      # Cron schedule for automatic incremental backups. Default in production
+      # would be "0 * * * *" (hourly). The local-test uses a tight cron so
+      # you don't have to wait long when verifying setup.
+      OPENINC_MONGO_BACKUP_CRON: "*/45 * * * *"
+
+      # Optional cron for scheduled integrity verification. Empty / unset =
+      # no scheduled verify (operators must press the button manually).
+      # When set, the daemon runs `verify` on this schedule independent of
+      # backups; failures log at error level so log-based alerting can match.
+      OPENINC_MONGO_BACKUP_VERIFY_CRON: "0 4 * * *"
+
+      # If true, scheduled verifies do a deep (sha256 re-hash) check instead
+      # of just structural integrity. Slower but catches silent file rot.
+      OPENINC_MONGO_BACKUP_VERIFY_DEEP: "true"
+
+      # =====================================================================
+      # APPEND-ONLY MODE (per database)
+      # =====================================================================
+      # When true, skips per-collection ID enumeration + delete detection on
+      # incremental backups. Massively faster for append-only workloads
+      # (sensor streams that only insert) at the cost of NOT capturing
+      # deletions — a deleted doc would persist in the chain and resurrect
+      # on restore. The data DB's config collection is exempt: it always
+      # keeps full delete tracking regardless of this flag. Default: false.
+
+      # Enabled here for the local-test because most demo collections are
+      # sensor-shaped (append-only). Set to "false" if you want to verify
+      # delete detection against the data DB.
       OPENINC_MONGO_BACKUP_APPEND_ONLY_DATA: "true"
-      # Access gate — at least ONE of (AUTH_USER+AUTH_PASSWORD) or ALLOWED_IPS
-      # MUST be set, otherwise the daemon refuses to start.
+
+      # Defaults to false here so the parse DB exercises the full delete-
+      # detection path. Uncomment + set to "true" if your parse data is
+      # also append-only.
+      OPENINC_MONGO_BACKUP_APPEND_ONLY_PARSE: "false"
+
+      # =====================================================================
+      # THROTTLING (for shared / single-node Mongo deployments)
+      # =====================================================================
+
+      # Pause between collections during a backup, in milliseconds. Applies
+      # ONLY after collections where mongodump actually ran (i.e. that had
+      # changes since the last backup) — collections without changes don't
+      # trigger the pause, so total time scales with active collections,
+      # not total count. Raise on a single mongod that also serves an
+      # application; WiredTiger gets time to evict and checkpoint.
+      # Default: 300. Typical "polite" values: 1000-5000.
+      OPENINC_MONGO_BACKUP_COLLECTION_PAUSE_MS: "1000"
+
+      # Run mongodump at low CPU + IO priority (Linux only). When true,
+      # mongodump is spawned via `nice -n 19 ionice -c 3 mongodump …`, so
+      # the kernel only grants it idle slices — the live workload always
+      # wins under contention. Backups take longer, but the host stays
+      # responsive. macOS hosts will fail at spawn time (no ionice on Darwin).
+      OPENINC_MONGO_BACKUP_NICE_BACKUP: "true"
+
+      # =====================================================================
+      # DASHBOARD UI
+      # =====================================================================
+
+      # HTTP/HTTPS port for the web dashboard. Bound to 127.0.0.1 on the
+      # host via the ports: mapping below — never exposed publicly without
+      # a TLS-terminating proxy in front.
+      OPENINC_MONGO_BACKUP_UI_PORT: "3000"
+
+      # =====================================================================
+      # ACCESS GATES
+      # =====================================================================
+      # The daemon refuses to start unless at least ONE of these is set:
+      #   - AUTH_USER + AUTH_PASSWORD (both required, both empty = disabled)
+      #   - ALLOWED_IPS (non-empty list)
+      # Half-configured auth (one var set without the other) is rejected
+      # at startup so it can't silently fall back to "no auth" in production.
+
       OPENINC_MONGO_BACKUP_AUTH_USER: "admin"
       OPENINC_MONGO_BACKUP_AUTH_PASSWORD: "test123"
+
+      # Comma-separated allowlist of IPs / CIDRs (IPv4 and IPv6 both supported).
+      # Empty / unset = no IP gate. Applied before Basic Auth, so unauthorised
+      # IPs never reach the auth challenge.
+      # OPENINC_MONGO_BACKUP_ALLOWED_IPS: "10.0.0.0/8,192.168.1.42,2001:db8::/32"
+
+      # Trust X-Forwarded-For for client IP resolution. ONLY enable when the
+      # daemon is reachable exclusively via a known reverse proxy — otherwise
+      # an attacker can spoof the header and trivially bypass the allowlist.
+      # OPENINC_MONGO_BACKUP_TRUST_PROXY: "false"
+
+      # =====================================================================
+      # TLS / TRANSPORT
+      # =====================================================================
+      # Either set BOTH TLS_CERT and TLS_KEY (native HTTPS), or set
+      # ALLOW_INSECURE_HTTP=true (explicit acknowledgement that TLS is
+      # terminated upstream by a reverse proxy). Neither = startup refused.
+
+      # Paths INSIDE the container — mount via a volume if you use these.
+      # OPENINC_MONGO_BACKUP_TLS_CERT: "/etc/ssl/crashsafe/server.crt"
+      # OPENINC_MONGO_BACKUP_TLS_KEY: "/etc/ssl/crashsafe/server.key"
+
       # Local-test runs behind no reverse proxy, but stays on 127.0.0.1 only
       # (see ports: below). Acknowledge plain HTTP explicitly — production
       # deployments should set TLS_CERT/TLS_KEY instead.
