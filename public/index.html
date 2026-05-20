@@ -910,7 +910,7 @@
         });
 
         const pollStatus = async () => {
-          const res = await fetch("/api/status");
+          const res = await fetch("api/status");
           const data = await res.json();
           setStatusData((prev) => {
             detectCompletions(data, completionRef.current);
@@ -1023,7 +1023,7 @@
         // confirms, both the fetch and the trigger fire back-to-back.
         const triggerDestructiveRestore = async (body, successText) => {
           try {
-            const cRes = await fetch("/api/restore/confirm", {
+            const cRes = await fetch("api/restore/confirm", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ target: body.target ?? "all" }),
@@ -1037,7 +1037,7 @@
             }
             const { token } = await cRes.json();
             await triggerAction(
-              "/api/trigger/restore",
+              "api/trigger/restore",
               { ...body, confirmToken: token },
               successText,
             );
@@ -1418,7 +1418,7 @@
                 {
                   onClick: () =>
                     triggerAction(
-                      "/api/trigger/backup",
+                      "api/trigger/backup",
                       { type: "incremental", target: db.type },
                       "Incremental backup triggered",
                     ),
@@ -1431,7 +1431,7 @@
                   type: "primary",
                   onClick: () =>
                     triggerAction(
-                      "/api/trigger/backup",
+                      "api/trigger/backup",
                       { type: "full", target: db.type },
                       "Full backup triggered",
                     ),
@@ -1443,7 +1443,7 @@
                 {
                   onClick: () =>
                     triggerAction(
-                      "/api/trigger/verify",
+                      "api/trigger/verify",
                       { target: db.type },
                       "Integrity verification triggered",
                     ),
