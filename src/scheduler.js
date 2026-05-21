@@ -47,7 +47,8 @@ function start() {
     if (!cron.validate(config.cron)) {
         throw new Error(`Invalid cron expression: "${config.cron}"`);
     }
-    logger.info({ schedule: config.cron }, 'Backup scheduler started');
+    const scheduleOpts = config.timezone ? { timezone: config.timezone } : undefined;
+    logger.info({ schedule: config.cron, timezone: config.timezone || 'system' }, 'Backup scheduler started');
     backupTask = cron.schedule(config.cron, async () => {
         logger.info('Scheduled backup triggered');
         backupLastRun = new Date();
@@ -64,14 +65,14 @@ function start() {
             backupLastStatus = 'error';
             logger.error({ err }, 'Scheduled backup failed');
         }
-    });
+    }, scheduleOpts);
 
     // Verify cron — optional. Empty / unset env var → never schedule.
     if (config.verifyCron) {
         if (!cron.validate(config.verifyCron)) {
             throw new Error(`Invalid verify cron expression: "${config.verifyCron}"`);
         }
-        logger.info({ schedule: config.verifyCron, deep: config.verifyDeep }, 'Verify scheduler started');
+        logger.info({ schedule: config.verifyCron, deep: config.verifyDeep, timezone: config.timezone || 'system' }, 'Verify scheduler started');
         verifyTask = cron.schedule(config.verifyCron, async () => {
             logger.info({ deep: config.verifyDeep }, 'Scheduled verify triggered');
             verifyLastRun = new Date();
@@ -110,7 +111,7 @@ function start() {
                 verifyLastStatus = 'error';
                 logger.error({ err }, 'Scheduled verify failed');
             }
-        });
+        }, scheduleOpts);
     }
 }
 

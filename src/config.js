@@ -53,6 +53,13 @@ const config = {
   get backupDir() { return get('DIR', './backups'); },
   get cron() { return get('CRON', '0 * * * *'); },
 
+  // Timezone for interpreting CRON and VERIFY_CRON expressions. IANA name
+  // (e.g. "Europe/Berlin", "UTC"). Empty / unset → system local time, which
+  // in the default Alpine container is UTC. Set this when you want the cron
+  // expression to mean wall-clock time in a specific zone regardless of the
+  // host timezone.
+  get timezone() { return get('TIMEZONE', '') || null; },
+
   // DB names — null means "skip this DB". System DBs are refused at access
   // time so a typo can't quietly point the daemon at admin/config/local.
   get dbData() { return validateDbName(get('DB_DATA', null) || null, 'DB_DATA'); },
