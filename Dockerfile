@@ -12,6 +12,11 @@ RUN apk update \
     && apk upgrade --no-cache \
     && apk add --no-cache mongodb-tools util-linux
 
+# The node base image bundles an npm whose vendored dependencies (e.g. undici)
+# can lag behind security fixes; upgrade npm itself so its bundled deps are
+# current too.
+RUN npm install -g npm@latest
+
 WORKDIR /app
 
 # Install Node.js dependencies
