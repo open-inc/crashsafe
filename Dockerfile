@@ -6,7 +6,13 @@
 # tools we actually ship from the latest release tag with those modules bumped
 # to the fixed versions (upstream master already uses them). Drop this stage
 # and return to `apk add mongodb-tools` once a fixed package ships.
-FROM golang:1.25-alpine AS mongo-tools
+# Pin the patch release explicitly: the floating 1.25 tag let an older
+# toolchain get baked in, and Go stdlib < 1.25.13 is flagged for
+# CVE-2026-39821 (net/http's vendored x/net/idna), CVE-2026-33818
+# (encoding/asn1), CVE-2026-56859 (encoding/xml), CVE-2026-56853
+# (net/http) and CVE-2026-56862 (crypto/tls). Bump this when a newer
+# patch release lands.
+FROM golang:1.25.14-alpine AS mongo-tools
 RUN apk add --no-cache git
 ARG MONGO_TOOLS_VERSION=100.17.0
 RUN git clone --depth 1 --branch ${MONGO_TOOLS_VERSION} https://github.com/mongodb/mongo-tools.git /src
@@ -41,16 +47,26 @@ RUN apk update \
 # mongodump/mongorestore built above with patched Go modules.
 COPY --from=mongo-tools /out/mongodump /out/mongorestore /usr/local/bin/
 
-# The node base image bundles an npm whose vendored dependencies (e.g. undici)
-# can lag behind security fixes; upgrade npm itself so its bundled deps are
-# current too.
-RUN npm install -g npm@latest
-
 WORKDIR /app
 
-# Install Node.js dependencies
+# Install Node.js dependencies, then strip the package managers out of the
+# runtime image. npm vendors its own dependency tree and even npm@latest still
+# bundles ip-address 10.2.0 (CVE-2026-69192), so upgrading npm cannot clear it
+# -- and nothing at runtime shells out to npm/npx/yarn, only to
+# mongodump/mongorestore. Removing them in the same layer as the install keeps
+# them out of the final image entirely. Keep this combined: splitting the rm
+# into its own RUN leaves the files in an earlier layer.
 COPY package*.json ./
-RUN npm install --omit=dev
+RUN npm install --omit=dev \
+    && rm -rf /usr/local/lib/node_modules/npm \
+              /usr/local/lib/node_modules/corepack \
+              /usr/local/bin/npm \
+              /usr/local/bin/npx \
+              /usr/local/bin/corepack \
+              /usr/local/bin/yarn \
+              /usr/local/bin/yarnpkg \
+              /opt/yarn-v* \
+              /root/.npm
 
 # Bundle app source
 COPY src ./src
