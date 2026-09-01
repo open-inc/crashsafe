@@ -1,11 +1,17 @@
 # --- mongodb-tools build stage ------------------------------------------------
 # Every prebuilt mongodump/mongorestore (Alpine's mongodb-tools 100.14.1-r3,
-# upstream releases through 100.17.0) still embeds golang.org/x/crypto < 0.52.0
-# (CVE-2026-46595 et al.) and golang.org/x/net < 0.55.0 (CVE-2026-39821), so
-# scanners flag the image no matter which package we install. Build the two
-# tools we actually ship from the latest release tag with those modules bumped
-# to the fixed versions (upstream master already uses them). Drop this stage
-# and return to `apk add mongodb-tools` once a fixed package ships.
+# upstream releases through 100.17.0) still embeds golang.org/x/crypto < 0.55.0
+# (CVE-2026-56854 et al.), golang.org/x/net < 0.55.0 (CVE-2026-39821) and
+# github.com/klauspost/compress < 1.18.7 (GHSA-259r-337f-4rfw), so scanners
+# flag the image no matter which package we install. Build the two tools we
+# actually ship from the latest release tag with those modules bumped to the
+# fixed versions. Drop this stage and return to `apk add mongodb-tools` once a
+# fixed package ships.
+#
+# GO-2026-5932 (golang.org/x/crypto/openpgp is unmaintained) has no fixed
+# version, so it stays reported for as long as x/crypto is a dependency at
+# all. Nothing here imports openpgp -- `go mod vendor` does not pull it in and
+# it is absent from both binaries -- so the report is module-level noise.
 # Pin the patch release explicitly: the floating 1.25 tag let an older
 # toolchain get baked in, and Go stdlib < 1.25.13 is flagged for
 # CVE-2026-39821 (net/http's vendored x/net/idna), CVE-2026-33818
@@ -18,7 +24,8 @@ ARG MONGO_TOOLS_VERSION=100.17.0
 RUN git clone --depth 1 --branch ${MONGO_TOOLS_VERSION} https://github.com/mongodb/mongo-tools.git /src
 WORKDIR /src
 # The repo vendors its dependencies, so re-vendor after the bump.
-RUN go get golang.org/x/crypto@v0.53.0 golang.org/x/net@v0.56.0 golang.org/x/text@v0.40.0 \
+RUN go get golang.org/x/crypto@v0.55.0 golang.org/x/net@v0.57.0 golang.org/x/text@v0.41.0 \
+        github.com/klauspost/compress@v1.18.7 \
     && go mod vendor
 # -X main.VersionStr mirrors what upstream's release build injects, so
 # `mongodump --version` stays meaningful.
