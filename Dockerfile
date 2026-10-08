@@ -48,9 +48,11 @@ FROM node:lts-alpine
 # `nice -n 19 ionice -c 3 …`). `nice` itself ships with busybox so no extra
 # package is needed for the CPU-priority side. Rebuild the image periodically
 # to pick up new CVE fixes from the upstream Alpine repos.
+# zlib is pinned to a floor because the base image still ships 1.3.2-r0
+# (CVE-2026-85091) and a cached `apk upgrade` layer can silently keep it.
 RUN apk update \
     && apk upgrade --no-cache \
-    && apk add --no-cache util-linux
+    && apk add --no-cache util-linux 'zlib>=1.3.2-r1'
 
 # mongodump/mongorestore built above with patched Go modules.
 COPY --from=mongo-tools /out/mongodump /out/mongorestore /usr/local/bin/
