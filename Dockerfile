@@ -1,8 +1,8 @@
 # --- mongodb-tools build stage ------------------------------------------------
 # Every prebuilt mongodump/mongorestore (Alpine's mongodb-tools 100.14.1-r3,
-# upstream releases through 100.17.0) still embeds golang.org/x/crypto < 0.56.0
-# (CVE-2026-56855, CVE-2026-78662 et al.), golang.org/x/net < 0.55.0
-# (CVE-2026-39821) and github.com/klauspost/compress < 1.18.7
+# upstream releases through 100.19.1) still embeds golang.org/x/crypto < 0.56.0
+# (CVE-2026-56855, CVE-2026-78662 et al.), golang.org/x/net < 0.60.0
+# (CVE-2026-39821, CVE-2026-78663 et al.) and github.com/klauspost/compress < 1.18.7
 # (GHSA-259r-337f-4rfw), so scanners flag the image no matter which package
 # we install. Build the two tools we actually ship from the latest release
 # tag with those modules bumped to the fixed versions. Drop this stage and
@@ -16,16 +16,18 @@
 # toolchain get baked in, and older Go stdlibs are flagged for
 # CVE-2026-39821 (net/http's vendored x/net/idna), CVE-2026-33818
 # (encoding/asn1), CVE-2026-56859 (encoding/xml), CVE-2026-56853
-# (net/http) and CVE-2026-56862 (crypto/tls). A 1.26+ toolchain is also a
+# (net/http), CVE-2026-56862 (crypto/tls) and, below 1.27.2,
+# CVE-2026-56857, CVE-2026-78663 et al. A 1.26+ toolchain is also a
 # hard requirement now: x/crypto v0.56.0 declares `go 1.26.0`, which a 1.25
 # toolchain refuses to build. Bump this when a newer patch release lands.
-FROM golang:1.27.1-alpine AS mongo-tools
+FROM golang:1.27.2-alpine AS mongo-tools
 RUN apk add --no-cache git
 ARG MONGO_TOOLS_VERSION=100.17.0
 RUN git clone --depth 1 --branch ${MONGO_TOOLS_VERSION} https://github.com/mongodb/mongo-tools.git /src
 WORKDIR /src
-# The repo vendors its dependencies, so re-vendor after the bump.
-RUN go get golang.org/x/crypto@v0.56.0 golang.org/x/net@v0.57.0 golang.org/x/text@v0.41.0 \
+# The repo vendors its dependencies, so re-vendor after the bump. x/net
+# v0.60.0 requires x/crypto v0.57.0 and x/text v0.42.0, so those move with it.
+RUN go get golang.org/x/crypto@v0.57.0 golang.org/x/net@v0.60.0 golang.org/x/text@v0.42.0 \
         github.com/klauspost/compress@v1.18.7 \
     && go mod vendor
 # -X main.VersionStr mirrors what upstream's release build injects, so
